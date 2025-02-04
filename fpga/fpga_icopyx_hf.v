@@ -20,14 +20,6 @@
 // frequency modes, the FPGA might perform some demodulation first, to
 // reduce the amount of data that we must send to the ARM.
 //-----------------------------------------------------------------------------
-//`include "define.v"
-
-//`include "hi_reader.v"
-//`include "hi_simulate.v"
-//`include "hi_iso14443a.v"
-//`include "hi_flite.v"
-//`include "hi_sniffer.v"
-//`include "hi_get_trace.v"
 
 module fpga_hf(
     input spck,
@@ -135,6 +127,10 @@ hi_simulate hs(
 );
 
 //   2 - HF ISO14443-A
+
+`define EDGE_DETECT_THRESHOLD   3
+`define EDGE_DETECT_THRESHOLDHIGH   20
+
 hi_iso14443a hisn(
     .ck_1356meg (ck_1356meg),
     .pwr_lo     (hisn_pwr_lo),
@@ -150,7 +146,9 @@ hi_iso14443a hisn(
     .ssp_dout   (ssp_dout),
     .ssp_clk    (hisn_ssp_clk),
     .debug      (hisn_debug),
-    .mod_type   (minor_mode)
+    .mod_type   (minor_mode),
+    .edge_detect_threshold (`EDGE_DETECT_THRESHOLD),
+    .edge_detect_threshold_high (`EDGE_DETECT_THRESHOLDHIGH)
 );
 
 //   3 - HF sniff

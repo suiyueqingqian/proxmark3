@@ -24,7 +24,7 @@
 //-----------------------------------------------------------------------------
 // iCLASS / PICOPASS
 //-----------------------------------------------------------------------------
-
+#define PICOPASS_BLOCK_SIZE    8
 
 // iCLASS reader flags
 #define FLAG_ICLASS_READER_INIT        0x01
@@ -87,6 +87,12 @@ typedef struct {
     uint8_t mac[4];
 } PACKED iclass_writeblock_req_t;
 
+// iCLASS write block request data structure
+typedef struct {
+    iclass_auth_req_t req;
+    uint8_t epurse[4];
+} PACKED iclass_credit_epurse_t;
+
 // iCLASS dump data structure
 typedef struct {
     uint8_t blockno;
@@ -98,6 +104,16 @@ typedef struct {
     uint8_t item_cnt;
     iclass_restore_item_t blocks[];
 } PACKED iclass_restore_req_t;
+
+typedef struct {
+    iclass_auth_req_t req;
+    iclass_auth_req_t req2;
+    uint32_t index;
+    uint32_t loop;
+    uint8_t nfa[8];
+    bool debug;
+    bool test;
+} PACKED iclass_recover_req_t;
 
 typedef struct iclass_premac {
     uint8_t mac[4];
@@ -138,12 +154,12 @@ typedef struct {
 
 // iCLASS secure mode memory mapping
 typedef struct {
-    uint8_t csn[8];
+    uint8_t csn[PICOPASS_BLOCK_SIZE];
     picopass_conf_block_t conf;
-    uint8_t epurse[8];
-    uint8_t key_d[8];
-    uint8_t key_c[8];
-    uint8_t app_issuer_area[8];
+    uint8_t epurse[PICOPASS_BLOCK_SIZE];
+    uint8_t key_d[PICOPASS_BLOCK_SIZE];
+    uint8_t key_c[PICOPASS_BLOCK_SIZE];
+    uint8_t app_issuer_area[PICOPASS_BLOCK_SIZE];
 } PACKED picopass_hdr_t;
 
 // iCLASS non-secure mode memory mapping

@@ -32,10 +32,37 @@
 #include "cmdnfc.h"            // print_type4_cc_info
 #include "commonutil.h"        // get_sw
 #include "protocols.h"         // ISO7816 APDU return codes
+#include "crypto/libpcrypto.h" // ecdsa
+#include "crypto/originality.h"
 
 #define TIMEOUT 2000
 
 static int CmdHelp(const char *Cmd);
+
+static bool st25ta_select(iso14a_card_select_t *card) {
+
+    clearCommandBuffer();
+    SendCommandMIX(CMD_HF_ISO14443A_READER, ISO14A_CONNECT | ISO14A_NO_DISCONNECT | ISO14A_NO_RATS, 0, 0, NULL, 0);
+    PacketResponseNG resp;
+    if (WaitForResponseTimeout(CMD_ACK, &resp, 1500) == false) {
+        PrintAndLogEx(DEBUG, "iso14443a card select timeout");
+        DropField();
+        return false;
+    } else {
+
+        uint16_t len = (resp.oldarg[1] & 0xFFFF);
+        if (len == 0) {
+            PrintAndLogEx(DEBUG, "iso14443a card select failed");
+            DropField();
+            return false;
+        }
+
+        if (card) {
+            memcpy(card, resp.data.asBytes, sizeof(iso14a_card_select_t));
+        }
+    }
+    return true;
+}
 
 static void print_st25ta_system_info(uint8_t *d, uint8_t n) {
     if (n < 0x12) {
@@ -44,73 +71,131 @@ static void print_st25ta_system_info(uint8_t *d, uint8_t n) {
     }
 
     PrintAndLogEx(NORMAL, "");
-    PrintAndLogEx(SUCCESS, "------------ " _CYAN_("ST System file") " ------------");
+    PrintAndLogEx(SUCCESS, "------------ " _CYAN_("ST System file") " -----------------------------");
 
-    uint16_t len = (d[0] << 8 | d[1]);
-    PrintAndLogEx(SUCCESS, " len      %u bytes ( " _GREEN_("0x%04X") " )", len, len);
+    PrintAndLogEx(SUCCESS, "Manufacture..... " _YELLOW_("%s"), getTagInfo(d[8]));
+    PrintAndLogEx(SUCCESS, "Product Code.... " _YELLOW_("%s"), get_st_chip_model(d[9]));
+    PrintAndLogEx(SUCCESS, "Device Serial... " _YELLOW_("%s"), sprint_hex_inrow(d + 10, 5));
 
-    if (d[2] == 0x80) {
-        PrintAndLogEx(SUCCESS, " ST reserved  ( 0x%02X )", d[2]);
-    } else {
-        PrintAndLogEx(SUCCESS, " GPO Config ( 0x%02X )", d[2]);
-        PrintAndLogEx(SUCCESS, "    config lock bit ( %s )", ((d[2] & 0x80) == 0x80) ? _RED_("locked") : _GREEN_("unlocked"));
+    if (d[2] != 0x80) {
+
+        PrintAndLogEx(SUCCESS, "GPO Config... 0x%02X", d[2]);
+        PrintAndLogEx(SUCCESS, " lock bit.... %s", ((d[2] & 0x80) == 0x80) ? _RED_("locked") : _GREEN_("unlocked"));
+
         uint8_t conf = (d[2] & 0x70) >> 4;
         switch (conf) {
             case 0:
-                PrintAndLogEx(SUCCESS, "");
                 break;
             case 1:
-                PrintAndLogEx(SUCCESS, "Session opened");
+                PrintAndLogEx(SUCCESS, " Session opened");
                 break;
             case 2:
-                PrintAndLogEx(SUCCESS, "WIP");
+                PrintAndLogEx(SUCCESS, " WIP");
                 break;
             case 3:
-                PrintAndLogEx(SUCCESS, "MIP");
+                PrintAndLogEx(SUCCESS, " MIP");
                 break;
             case 4:
-                PrintAndLogEx(SUCCESS, "Interrupt");
+                PrintAndLogEx(SUCCESS, " Interrupt");
                 break;
             case 5:
-                PrintAndLogEx(SUCCESS, "State Control");
+                PrintAndLogEx(SUCCESS, " State Control");
                 break;
             case 6:
-                PrintAndLogEx(SUCCESS, "RF Busy");
+                PrintAndLogEx(SUCCESS, " RF Busy");
                 break;
             case 7:
-                PrintAndLogEx(SUCCESS, "Field Detect");
+                PrintAndLogEx(SUCCESS, " Field Detect");
                 break;
         }
     }
 
-    PrintAndLogEx(SUCCESS, " Event counter config ( 0x%02X )", d[3]);
-    PrintAndLogEx(SUCCESS, "        config lock bit ( %s )", ((d[3] & 0x80) == 0x80) ? _RED_("locked") : _GREEN_("unlocked"));
-    PrintAndLogEx(SUCCESS, "                counter ( %s )", ((d[3] & 0x02) == 0x02) ? _RED_("enabled") : _GREEN_("disable"));
-    PrintAndLogEx(SUCCESS, "   counter increment on ( %s )", ((d[3] & 0x01) == 0x01) ? _YELLOW_("write") : _YELLOW_("read"));
+    PrintAndLogEx(NORMAL, "");
+    PrintAndLogEx(SUCCESS, "Event counter config.... 0x%02X", d[3]);
+    PrintAndLogEx(SUCCESS, " config lock bit........ %s", ((d[3] & 0x80) == 0x80) ? _RED_("locked") : _GREEN_("unlocked"));
+    PrintAndLogEx(SUCCESS, " counter................ %s", ((d[3] & 0x02) == 0x02) ? _RED_("enabled") : _GREEN_("disable"));
+    PrintAndLogEx(SUCCESS, " counter increment on... %s", ((d[3] & 0x01) == 0x01) ? _YELLOW_("write") : _YELLOW_("read"));
+    PrintAndLogEx(NORMAL, "");
+
+    uint16_t len = (d[0] << 8 | d[1]);
+
+    PrintAndLogEx(SUCCESS, "----------------- " _CYAN_("raw") " -----------------------------------");
+    PrintAndLogEx(SUCCESS, " %s", sprint_hex_inrow(d, n));
+    PrintAndLogEx(SUCCESS, " %02X%02X................................ - Len ( %u bytes )", d[0], d[1], len);
+
+    if (d[2] == 0x80) {
+        PrintAndLogEx(SUCCESS, " ....%02X.............................. - ST reserved", d[2]);
+    } else {
+        PrintAndLogEx(SUCCESS, " ....%02X.............................. - GPO config", d[2]);
+    }
+
+    PrintAndLogEx(SUCCESS, " ......%02X............................ - Event counter config", d[3]);
 
     uint32_t counter = (d[4] << 16 | d[5] << 8 | d[6]);
-    PrintAndLogEx(SUCCESS, " 20bit counter ( 0x%05X )", counter & 0xFFFFF);
-
-    PrintAndLogEx(SUCCESS, " Product version ( 0x%02X )", d[7]);
-
-    PrintAndLogEx(SUCCESS, "          UID " _GREEN_("%s"), sprint_hex_inrow(d + 8, 7));
-    PrintAndLogEx(SUCCESS, "          MFG  0x%02X, " _YELLOW_("%s"), d[8], getTagInfo(d[8]));
-    PrintAndLogEx(SUCCESS, " Product Code  0x%02X, " _YELLOW_("%s"), d[9], get_st_chip_model(d[9]));
-    PrintAndLogEx(SUCCESS, "      Device#  " _YELLOW_("%s"), sprint_hex_inrow(d + 10, 5));
+    PrintAndLogEx(SUCCESS, " ........%02X%02X%02X...................... - 20 bit counter ( %u )", d[4], d[5], d[6], (counter & 0xFFFFF));
+    PrintAndLogEx(SUCCESS, " ..............%02X.................... - Product version", d[7]);
+    PrintAndLogEx(SUCCESS, " ................%s...... - UID", sprint_hex_inrow(d + 8, 7));
 
     uint16_t mem = (d[0xF] << 8 | d[0x10]);
-    PrintAndLogEx(SUCCESS, " Memory Size - 1   %u bytes ( " _GREEN_("0x%04X") " )", mem, mem);
+    PrintAndLogEx(SUCCESS, " ..............................%02X%02X.. - Mem size - 1 ( %u bytes )", d[0xf], d[0x10], mem);
 
-    PrintAndLogEx(SUCCESS, " IC Reference code %u ( 0x%02X )", d[0x12], d[0x12]);
-
-    PrintAndLogEx(SUCCESS, "----------------- " _CYAN_("raw") " -----------------");
-    PrintAndLogEx(SUCCESS, "%s", sprint_hex_inrow(d, n));
+    PrintAndLogEx(SUCCESS, " ..................................%02X - IC ref code", d[0x11]);
     PrintAndLogEx(NORMAL, "");
 
     /*
     0012
     80000000001302E2007D0E8DCC
     */
+}
+
+static int print_st25ta_signature(uint8_t *uid, uint8_t *signature) {
+    int index = originality_check_verify_ex(uid, 7, signature, 32, PK_ST25TA, false, true);
+    PrintAndLogEx(NORMAL, "");
+    return originality_check_print(signature, 32, index);
+}
+
+static int st25ta_get_signature(uint8_t *signature) {
+    /*
+    hf 14a raw -sck 0200A4040007D276000085010100
+    hf 14a raw -ck 0300A4000C020001
+    hf 14a raw -c 02a2b000e020
+    */
+    typedef struct {
+        const char *apdu;
+        uint8_t apdulen;
+    } transport_st25a_apdu_t;
+
+    transport_st25a_apdu_t cmds[] = {
+        { "\x00\xA4\x04\x00\x07\xD2\x76\x00\x00\x85\x01\x01\x00", 13 },
+        { "\x00\xA4\x00\x0C\x02\x00\x01", 7 },
+        { "\xa2\xb0\x00\xe0\x20", 5 },
+    };
+
+    uint8_t resp[40] = {0};
+    int resplen = 0;
+    bool activate_field = true;
+
+    for (uint8_t i = 0; i < ARRAYLEN(cmds); i++) {
+        int res = ExchangeAPDU14a((uint8_t *)cmds[i].apdu, cmds[i].apdulen, activate_field, true, resp, sizeof(resp), &resplen);
+        if (res != PM3_SUCCESS) {
+            DropField();
+            return res;
+        }
+        activate_field = false;
+    }
+    if (resplen != 32) {
+        if ((resplen == 2) && (resp[0] == 0x69) && (resp[1] == 0x82)) {
+            PrintAndLogEx(WARNING, "GetSignature: Security status not satisfied");
+        }
+        DropField();
+        return PM3_ESOFT;
+    }
+    if (signature) {
+        memcpy(signature, resp, 32);
+    }
+
+    DropField();
+    return PM3_SUCCESS;
 }
 
 // ST25TA
@@ -217,13 +302,20 @@ static int infoHFST25TA(void) {
         return PM3_ESOFT;
     }
 
-
-
     PrintAndLogEx(NORMAL, "");
     PrintAndLogEx(INFO, "--- " _CYAN_("Tag Information") " ---------------------------");
     PrintAndLogEx(NORMAL, "");
+    iso14a_card_select_t card;
+    if (st25ta_select(&card)) {
+        uint8_t sig[32] = {0};
+        if (st25ta_get_signature(sig) == PM3_SUCCESS) {
+            print_st25ta_signature(card.uid, sig);
+        }
+    }
+
     print_type4_cc_info(st_cc_data, sizeof(st_cc_data));
     print_st25ta_system_info(response, resplen - 2);
+
     return PM3_SUCCESS;
 }
 
@@ -288,7 +380,7 @@ int CmdHFST25TANdefRead(const char *Cmd) {
         arg_param_begin,
         arg_str0("p", "pwd", "<hex>", "16 byte read password"),
         arg_str0("f", "file", "<fn>", "save raw NDEF to file"),
-        arg_litn("v",  "verbose",  0, 2, "show technical data"),
+        arg_lit0("v",  "verbose", "verbose output"),
         arg_param_end
     };
     CLIExecWithReturn(ctx, Cmd, argtable, true);
@@ -404,10 +496,15 @@ int CmdHFST25TANdefRead(const char *Cmd) {
         return PM3_ESOFT;
     }
 
-    if (fnlen != 0) {
-        saveFile(filename, ".bin", response + 2, resplen - 4);
-    }
     NDEFRecordsDecodeAndPrint(response + 2, resplen - 4, verbose);
+
+    // get total NDEF length before save. If fails, we save it all
+    size_t n = 0;
+    if (NDEFGetTotalLength(response, resplen, &n) != PM3_SUCCESS)
+        n = resplen;
+
+    pm3_save_dump(filename, response + 2, n, jsfNDEF);
+
     return PM3_SUCCESS;
 }
 

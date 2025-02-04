@@ -403,8 +403,12 @@ static int CmdIndalaDemodAlt(const char *Cmd) {
 
     // worst case with g_GraphTraceLen=40000 is < 4096
     // under normal conditions it's < 2048
-    uint8_t data[MAX_GRAPH_TRACE_LEN] = {0};
-    size_t datasize = getFromGraphBuf(data);
+    uint8_t *data = calloc(MAX_GRAPH_TRACE_LEN, sizeof(uint8_t));
+    if (data == NULL) {
+        PrintAndLogEx(FAILED, "failed to allocate memory");
+        return PM3_EMALLOC;
+    }
+    size_t datasize = getFromGraphBuffer(data);
 
     uint8_t rawbits[4096] = {0};
     int rawbit = 0;
@@ -446,6 +450,7 @@ static int CmdIndalaDemodAlt(const char *Cmd) {
             count = 0;
         }
     }
+    free(data);
 
     if (rawbit > 0) {
         PrintAndLogEx(INFO, "Recovered %d raw bits, expected: %zu", rawbit, g_GraphTraceLen / 32);
@@ -663,7 +668,7 @@ static int CmdIndalaSim(const char *Cmd) {
     bool fmt4041x = arg_get_lit(ctx, 5);
 
 
-    int32_t cardnumber;
+    int32_t cardnumber = 0;
     uint8_t fc = 0;
     uint16_t cn = 0;
     bool got_cn = false, got_26 = false;
@@ -747,7 +752,7 @@ static int CmdIndalaSim(const char *Cmd) {
     // lf simpsk -1 -c 32 --fc 2 -d 0102030405060708
 
 
-    PrintAndLogEx(SUCCESS, "Press pm3-button to abort simulation or run another command");
+    PrintAndLogEx(SUCCESS, "Press " _GREEN_("pm3 button") " to abort simulation or run another command");
 
     // indala PSK,  clock 32, carrier 0
     lf_psksim_t *payload = calloc(1, sizeof(lf_psksim_t) + sizeof(bs));
@@ -763,7 +768,7 @@ static int CmdIndalaSim(const char *Cmd) {
     PacketResponseNG resp;
     WaitForResponse(CMD_LF_PSK_SIMULATE, &resp);
 
-    PrintAndLogEx(INFO, "Done");
+    PrintAndLogEx(INFO, "Done!");
     if (resp.status != PM3_EOPABORTED) {
         return resp.status;
     }
@@ -940,7 +945,7 @@ static int CmdIndalaClone(const char *Cmd) {
     } else {
         res = clone_t55xx_tag(blocks, ARRAYLEN(blocks));
     }
-    PrintAndLogEx(SUCCESS, "Done");
+    PrintAndLogEx(SUCCESS, "Done!");
     PrintAndLogEx(HINT, "Hint: try " _YELLOW_("`lf indala reader`") " to verify");
     return res;
 }
@@ -1010,7 +1015,7 @@ static int CmdIndalaBrute(const char *Cmd) {
     }
     PrintAndLogEx(NORMAL, "");
     PrintAndLogEx(INFO, "Started brute-forcing INDALA Prox reader");
-    PrintAndLogEx(INFO, "Press " _GREEN_("<Enter>") " or pm3-button to abort simulation");
+    PrintAndLogEx(INFO, "Press " _GREEN_("pm3 button") " or " _GREEN_("<Enter>") " to abort simulation");
     PrintAndLogEx(NORMAL, "");
 
     // main loop
@@ -1159,11 +1164,26 @@ int getIndalaBits(uint8_t fc, uint16_t cn, uint8_t *bits) {
     }
 
     // add parity
-    bits[34] = 1; // p1  64 - 30 = 34
-    bits[38] = 1; // p2  68 - 30 = 38
+    // bits[34] = 1; // p1  64 - 30 = 34
+    // bits[38] = 1; // p2  68 - 30 = 38
 
     // 92 = 62
     // 93 = 63
+
+    bits[34] = 0; // parity for odd bits
+    bits[38] = 0; // parity for even bits
+    uint8_t p1 = 1;
+    uint8_t p2 = 1;
+
+    for (int i = 33; i < 64; i++) {
+        if (i % 2)
+            p1 ^= bits[i];
+        else
+            p2 ^= bits[i];
+    }
+
+    bits[34] = p1; // parity for odd bits
+    bits[38] = p2; // parity for even bits
 
     return PM3_SUCCESS;
 }

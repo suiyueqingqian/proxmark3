@@ -66,6 +66,265 @@ static t55xx_conf_block_t config = {
 };
 
 static t55xx_memory_item_t cardmem[T55x7_BLOCK_COUNT] = {{0}};
+/*
+#define DC(x)  ((x) + 128)
+
+static bool t55xx_is_valid_block0(uint32_t block, uint8_t rfclk, uint8_t pskcf) {
+
+    if (block == 0x00) {
+        return false;
+    }
+
+    // Master key = 6 or 9
+    if ((((block >> 28)& 0xF) != 0x0) &&
+        (((block >> 28)& 0xF) != 0x6) &&
+        (((block >> 28)& 0xF) != 0x9)) {
+        return false;
+    }
+
+    // X Mode
+    if ( ((block >> 17) & 1) && ((((block >> 28) & 0xf) == 0x6) || (((block >> 28) & 0xf) == 0x9)) ) {
+        // X mode fixed 0 bits
+        if ((block & 0x0F000000) != 0x00) {
+            return false;
+        }
+    } else {
+        // / Basic Mode fixed 0 bits
+        if ((block & 0x0FE00106) != 0x00) {
+            return false;
+        }
+    }
+
+    // Modulation
+    if ( (((block >> 12) & 0x1F) != 0x00) && // Direct
+         (((block >> 12) & 0x1F) != 0x01) && // PSK1
+         (((block >> 12) & 0x1F) != 0x02) && // PSK2
+         (((block >> 12) & 0x1F) != 0x03) && // PSK3
+         (((block >> 12) & 0x1F) != 0x04) && // FSK1
+         (((block >> 12) & 0x1F) != 0x05) && // FSK2
+         (((block >> 12) & 0x1F) != 0x06) && // FSK1a
+         (((block >> 12) & 0x1F) != 0x07) && // FSK2a
+         (((block >> 12) & 0x1F) != 0x08) && // Manchester
+         (((block >> 12) & 0x1F) != 0x10) && // Bi-phase
+         (((block >> 12) & 0x1F) != 0x18) ) { // Reserved
+         return false;
+    }
+
+    PrintAndLogEx(DEBUG, "suggested block... %08x", block);
+
+    // check pskcf
+    if ((pskcf <= 3) && (((block >> 10) & 0x3) != pskcf)) {
+        PrintAndLogEx(DEBUG, "fail 6  -  %u   %u", pskcf,  (block >> 10) & 0x3);
+        return false;
+    }
+
+    uint8_t testSpeed;
+
+    // check rfclk
+    if ((((block >> 17) & 1) == 1) && ((((block >> 28) & 0xf) == 0x6) || (((block >> 28) & 0xf) == 0x9)) ){ // X mode speedBits
+        testSpeed = (((block >> 18) & 0x3F) * 2) + 2;
+    } else {
+        uint8_t basicSpeeds[] = {8,16,32,40,50,64,100,128};
+        testSpeed = basicSpeeds[(block >> 18) & 0x7];
+    }
+
+    if (testSpeed != rfclk) {
+        PrintAndLogEx(DEBUG, "fail 7  - %u  %u ", testSpeed , rfclk);
+        return false;
+    }
+    return true;
+}
+
+static void t55xx_psk1_demod (int *data, uint8_t rfclk, uint8_t pskcf, uint32_t *block) {
+
+    if ((rfclk < 8) || (rfclk > 128)) {
+        return;
+    }
+
+    switch (pskcf) {
+        case 0: {
+            pskcf = 2;
+            break;
+        }
+        case 1: {
+            pskcf = 4;
+            break;
+        }
+        case 2: {
+            pskcf = 8;
+            break;
+        }
+        default: {
+            break;
+        }
+    }
+
+    int startOffset = 1; // where to start reading data samples
+    int sampleCount = 0; // Counter for 1 bit of samples
+    int samples0, samples1;      // Number of High even and odd bits in a sample.
+    int startBitOffset = 1; // which bit to start at e.g. for rf/32 1 33 65 ...
+    int bitCount = 0;
+    uint32_t myblock = 0;
+    int offset;
+    uint8_t drift = 0;
+    uint8_t tuneOffset = 0;
+
+    drift = (rfclk % pskcf);  // 50 2 = 1  50 4 = 2
+
+    // locate first "0" - high transisiton for correct start offset
+    while (DC(data[startOffset]) <= (DC(data[startOffset - 1]) + 5)) {
+    //    sampleToggle ^= 1;
+        startOffset++;
+    }
+
+    // Start sample may be 1 off due to sample alignment with chip modulation
+    // so seach for the first lower value, and adjust as needed
+    if (pskcf == 2) {
+
+        tuneOffset = startOffset + 1;
+
+        while (DC(data[tuneOffset]) >= (DC(data[tuneOffset - 1]) + 5)) {
+            tuneOffset++;
+        }
+
+        if ((tuneOffset - startOffset - 1) % 2) {
+            startOffset++;
+        }
+    }
+
+    uint8_t pskcfidx = 0;
+
+    // Get the offset to the first sample of the data block
+    offset = (rfclk * startBitOffset) + startOffset;
+
+    pskcfidx = (drift / 2);
+    pskcfidx = pskcfidx % pskcf;
+
+    // while data my be in the settle period of sampling
+    // First 18 - 24 bits not usable for reference only
+    while (offset < 20) {
+        offset += (32 * rfclk);
+    }
+
+    // Read 1 block of data
+    for (bitCount = 0; bitCount < 32; bitCount++) {
+
+        samples0 = 0;
+        samples1 = 0;
+
+        // Get 1 bit of data
+        for (sampleCount = 0; sampleCount < rfclk; sampleCount++){
+            // Count number of even and odd high bits at center to edge
+            switch (pskcf) {
+                case 2: {
+
+                    // if current sample is high
+                    if (DC(data[offset]) > DC(data[offset + 1])) {
+                        if (pskcfidx == 0) {
+                            samples0++;
+                        } else {
+                            samples1++;
+                        }
+                    }
+                    break;
+                }
+                case 4: {
+
+                    // only check pskcf 2nd bit x 1 x x
+                    if (pskcfidx == 1) {
+
+                        // if current sample is high
+                        if (DC(data[offset]) > DC(data[offset + 2])) {
+                            samples0++;
+                        } else {
+                            samples1++;
+                        }
+                    }
+                    break;
+                }
+                case 8: {
+
+                    if (pskcfidx == 3) {  // x x x 1 x x x x   // 00041840   : FFFBE7BF
+
+                        // if current sample is high
+                        if (DC(data[offset]) > DC(data[offset + 4])) {
+                            samples0++;
+                        } else {
+                            samples1++;
+                        }
+                    }
+                    break;
+                }
+                default: {
+                    break;
+                }
+            }
+
+            // If at bit boundary (after first bit) then adjust phase check for drift
+            if ((sampleCount > 0) && (sampleCount % rfclk) == 0) {
+                pskcfidx -= drift;
+            }
+
+            offset++;
+            pskcfidx++;
+            pskcfidx = pskcfidx % pskcf;
+        }
+
+        myblock <<= 1;
+        if (samples1 > samples0) {
+            myblock++;
+        }
+    }
+
+    *block = myblock;
+}
+
+static void t55xx_psk2_demod (int *data, uint8_t rfclk, uint8_t pskcf, uint32_t *block) {
+    // decode PSK
+    t55xx_psk1_demod (data, rfclk, pskcf, block);
+
+    uint32_t new_block = 0;
+    uint8_t prev_phase = 1;
+
+    // Convert to PSK2
+    for (int8_t bit = 31; bit >= 0; bit--) {
+
+        new_block <<= 1;
+
+        if (((*block >> bit) & 1) != prev_phase) {
+            new_block++;
+        }
+
+        prev_phase = ((*block >> bit) & 1);
+    }
+
+    *block = new_block;
+}
+
+static void t55xx_search_config_psk(int *d, int pskV) {
+
+    for (uint8_t pskcf = 0; pskcf < 3; pskcf++) {
+
+        for (uint8_t speedBits = 0; speedBits < 64; speedBits++) {
+
+            uint8_t rfclk = rfclk = (2 * speedBits) + 2;
+            uint32_t block = 0;
+
+            if (pskV == 1) {
+                t55xx_psk1_demod (d, rfclk, pskcf, &block);
+            }
+
+            if (pskV == 2) {
+                t55xx_psk2_demod (d, rfclk, pskcf, &block);
+            }
+
+            if (t55xx_is_valid_block0(block, rfclk, pskcf)) {
+                PrintAndLogEx(SUCCESS, "Valid config block [%08X] - rfclk [%d] - pskcf [%d]", block, rfclk, pskcf);
+            }
+        }
+    }
+}
+*/
 
 t55xx_conf_block_t Get_t55xx_Config(void) {
     return config;
@@ -398,7 +657,7 @@ int t55xxWrite(uint8_t block, bool page1, bool usepwd, bool testMode, uint32_t p
 
 void printT5xxHeader(uint8_t page) {
     PrintAndLogEx(NORMAL, "");
-    PrintAndLogEx(SUCCESS, "Page " _YELLOW_("%d"), page);
+    PrintAndLogEx(SUCCESS, _YELLOW_("Page %d"), page);
     PrintAndLogEx(SUCCESS, "blk | hex data | binary                           | ascii");
     PrintAndLogEx(SUCCESS, "----+----------+----------------------------------+-------");
 }
@@ -1151,7 +1410,8 @@ bool t55xxTryDetectModulationEx(uint8_t downlink_mode, bool print_config, uint32
         clk = GetPskClock("", false);
         if (clk > 0) {
             // allow undo
-            save_restoreGB(GRAPH_SAVE);
+            buffer_savestate_t saveState = save_bufferS32(g_GraphBuffer, g_GraphTraceLen);
+            saveState.offset = g_GridOffset;
             // skip first 160 samples to allow antenna to settle in (psk gets inverted occasionally otherwise)
             CmdLtrim("-i 160");
             if ((PSKDemod(0, 0, 6, false) == PM3_SUCCESS) && test(DEMOD_PSK1, &tests[hits].offset, &bitRate, clk, &tests[hits].Q5)) {
@@ -1200,7 +1460,10 @@ bool t55xxTryDetectModulationEx(uint8_t downlink_mode, bool print_config, uint32
                 }
             } // inverse waves does not affect this demod
             //undo trim samples
-            save_restoreGB(GRAPH_RESTORE);
+            restore_bufferS32(saveState, g_GraphBuffer);
+            g_GridOffset = saveState.offset;
+            // t55xx_search_config_psk(g_GraphBuffer, 1);
+            // t55xx_search_config_psk(g_GraphBuffer, 2);
         }
     }
     if (hits == 1) {
@@ -1286,6 +1549,7 @@ bool testKnownConfigBlock(uint32_t block0) {
         case T55X7_KERI_CONFIG_BLOCK:
         case T55X7_NEXWATCH_CONFIG_BLOCK:
         case T55X7_JABLOTRON_CONFIG_BLOCK:
+        case T55X7_PYRONIX_CONFIG_BLOCK:
             return true;
     }
     return false;
@@ -1449,10 +1713,17 @@ static bool testBitRate(uint8_t readRate, uint8_t clk) {
 
 bool test(uint8_t mode, uint8_t *offset, int *fndBitRate, uint8_t clk, bool *Q5) {
 
-    if (g_DemodBufferLen < 64) return false;
+    if (g_DemodBufferLen < 64) {
+        return false;
+    }
+
     for (uint8_t idx = 28; idx < 64; idx++) {
+
         uint8_t si = idx;
-        if (PackBits(si, 28, g_DemodBuffer) == 0x00) continue;
+
+        if (PackBits(si, 28, g_DemodBuffer) == 0x00) {
+            continue;
+        }
 
         uint8_t safer    = PackBits(si, 4, g_DemodBuffer);
         si += 4;     //master key
@@ -1460,7 +1731,10 @@ bool test(uint8_t mode, uint8_t *offset, int *fndBitRate, uint8_t clk, bool *Q5)
         si += 4;     //was 7 & +=7+3 //should be only 4 bits if extended mode
         // 2nibble must be zeroed.
         // moved test to here, since this gets most faults first.
-        if (resv > 0x00) continue;
+
+        if (resv > 0x00) {
+            continue;
+        }
 
         int bitRate      = PackBits(si, 6, g_DemodBuffer);
         si += 6;     //bit rate (includes extended mode part of rate)
@@ -1475,20 +1749,33 @@ bool test(uint8_t mode, uint8_t *offset, int *fndBitRate, uint8_t clk, bool *Q5)
         //if extended mode
         bool extMode = ((safer == 0x6 || safer == 0x9) && extend) ? true : false;
 
-        if (!extMode) {
-            if (bitRate > 7) continue;
-            if (!testBitRate(bitRate, clk)) continue;
-        } else { //extended mode bitrate = same function to calc bitrate as em4x05
-            if (EM4x05_GET_BITRATE(bitRate) != clk) continue;
+        if (extMode == false) {
 
+            if (bitRate > 7) {
+                continue;
+            }
+
+            if (testBitRate(bitRate, clk) == false) {
+                continue;
+            }
+
+        } else { //extended mode bitrate = same function to calc bitrate as em4x05
+            if (EM4x05_GET_BITRATE(bitRate) != clk) {
+                continue;
+            }
         }
+
         //test modulation
-        if (!testModulation(mode, modread)) continue;
+        if (testModulation(mode, modread) == false) {
+            continue;
+        }
+
         *fndBitRate = bitRate;
         *offset = idx;
         *Q5 = false;
         return true;
     }
+
     if (testQ5(mode, offset, fndBitRate, clk)) {
         *Q5 = true;
         return true;
@@ -1665,8 +1952,8 @@ static int CmdT55xxDangerousRaw(const char *Cmd) {
     ng.bitlen = 0;
     memset(ng.data, 0x00, sizeof(ng.data));
 
-    int bin_len = 127;
-    uint8_t bin[128] = {0};
+    uint8_t bin[129] = {0};
+    int bin_len = sizeof(bin) - 1; // CLIGetStrWithReturn does not guarantee string to be null-terminated
     CLIGetStrWithReturn(ctx, 1, bin, &bin_len);
 
     ng.time = arg_get_int_def(ctx, 2, 0);
@@ -1677,7 +1964,7 @@ static int CmdT55xxDangerousRaw(const char *Cmd) {
         return PM3_EINVARG;
     }
 
-    int bs_len = binstring2binarray(ng.data, (char *)bin, bin_len);
+    int bs_len = binstr_2_binarray(ng.data, (char *)bin, bin_len);
     if (bs_len == 0) {
         return PM3_EINVARG;
     }
@@ -1853,7 +2140,7 @@ static int CmdT55xxReadTrace(const char *Cmd) {
         ct = localtime_r(&now, &tm_buf);
 #endif
 
-        if (data.year > ct->tm_year - 110)
+        if (ct != NULL && (data.year > ct->tm_year - 110))
             data.year += 2000;
         else
             data.year += 2010;
@@ -2007,6 +2294,9 @@ static void printT5x7KnownBlock0(uint32_t b0) {
             break;
         case T55X7_NEXWATCH_CONFIG_BLOCK:
             snprintf(s + strlen(s), sizeof(s) - strlen(s), "NexWatch, Quadrakey ");
+            break;
+        case T55X7_PYRONIX_CONFIG_BLOCK:
+            snprintf(s + strlen(s), sizeof(s) - strlen(s), "Pyronix ");
             break;
         default:
             break;
@@ -2217,7 +2507,7 @@ static int CmdT55xxDump(const char *Cmd) {
     CLIParserContext *ctx;
     CLIParserInit(&ctx, "lf t55xx dump",
                   "This command dumps a T55xx card Page 0 block 0-7.\n"
-                  "It will create three files (bin/eml/json)",
+                  "It will create two files (bin/json)",
                   "lf t55xx dump\n"
                   "lf t55xx dump -p aabbccdd --override\n"
                   "lf t55xx dump -f my_lf_dump"
@@ -2229,7 +2519,7 @@ static int CmdT55xxDump(const char *Cmd) {
         arg_str0("f", "file", "<fn>", "filename (default is generated on blk 0)"),
         arg_lit0("o", "override", "override, force pwd read despite danger to card"),
         arg_str0("p", "pwd", "<hex>", "password (4 hex bytes)"),
-        arg_lit0(NULL, "ns", "no save"),
+        arg_lit0(NULL, "ns", "no save to file"),
     };
     uint8_t idx = 5;
     arg_add_t55xx_downloadlink(argtable, &idx, T55XX_DLMODE_SINGLE, T55XX_DLMODE_SINGLE);
@@ -2278,6 +2568,9 @@ static int CmdT55xxDump(const char *Cmd) {
 
     bool success = true;
 
+    PrintAndLogEx(NORMAL, "");
+    PrintAndLogEx(INFO, "------------------------- " _CYAN_("T55xx tag memory") " -----------------------------");
+
     // Due to the few different T55xx cards and number of blocks supported
     // will save the dump file if ALL page 0 is OK
     printT5xxHeader(0);
@@ -2298,8 +2591,14 @@ static int CmdT55xxDump(const char *Cmd) {
         }
     }
 
+    if (nosave) {
+        PrintAndLogEx(INFO, "Called with no save option");
+        PrintAndLogEx(NORMAL, "");
+        return PM3_SUCCESS;
+    }
+
     // all ok, save dump to file
-    if (success && nosave == false) {
+    if (success) {
 
         // set default filename, if not set by user
         if (strlen(filename) == 0) {
@@ -2315,17 +2614,13 @@ static int CmdT55xxDump(const char *Cmd) {
         }
 
         // Swap endian so the files match the txt display
-        uint32_t data[T55x7_BLOCK_COUNT];
+        uint32_t data[T55x7_BLOCK_COUNT] = {0};
 
         for (int i = 0; i < T55x7_BLOCK_COUNT; i++) {
             data[i] = BSWAP_32(cardmem[i].blockdata);
         }
 
-        // saveFileEML will add .eml extension to filename
-        // saveFile (binary) passes in the .bin extension.
-        saveFileJSON(filename, jsfT55x7, (uint8_t *)data, T55x7_BLOCK_COUNT * sizeof(uint32_t), NULL);
-        saveFileEML(filename, (uint8_t *)data, T55x7_BLOCK_COUNT * sizeof(uint32_t), sizeof(uint32_t));
-        saveFile(filename, ".bin", data, sizeof(data));
+        pm3_save_dump(filename, (uint8_t *)data, (T55x7_BLOCK_COUNT * sizeof(uint32_t)), jsfT55x7);
     }
 
     return PM3_SUCCESS;
@@ -2340,7 +2635,7 @@ static int CmdT55xxRestore(const char *Cmd) {
 
     void *argtable[] = {
         arg_param_begin,
-        arg_str0("f", "file", "<fn>", "filename of dump file"),
+        arg_str0("f", "file", "<fn>", "Specify a filename for dump file"),
         arg_str0("p", "pwd", "<hex>", "password if target card has password set (4 hex bytes)"),
         arg_param_end
     };
@@ -2891,11 +3186,11 @@ static int CmdResetRead(const char *Cmd) {
             free(got);
             return PM3_ETIMEOUT;
         }
-        setGraphBuf(got, gotsize);
+        setGraphBuffer(got, gotsize);
         free(got);
     }
 
-    PrintAndLogEx(INFO, "Done");
+    PrintAndLogEx(INFO, "Done!");
     return PM3_SUCCESS;
 }
 
@@ -3092,7 +3387,7 @@ static int CmdT55xxChkPwds(const char *Cmd) {
         snprintf(filename, sizeof(filename), "t55xx_default_pwds");
     }
 
-    PrintAndLogEx(INFO, "press " _GREEN_("<Enter>") " to exit");
+    PrintAndLogEx(INFO, "Press " _GREEN_("<Enter>") " to exit");
     PrintAndLogEx(NORMAL, "");
     /*
     // block 7,  page1 = false, usepwd = false, override = false, pwd = 00000000
@@ -3188,7 +3483,7 @@ static int CmdT55xxChkPwds(const char *Cmd) {
             return PM3_ESOFT;
         }
 
-        PrintAndLogEx(INFO, "press " _GREEN_("<Enter>") " to exit");
+        PrintAndLogEx(INFO, "Press " _GREEN_("<Enter>") " to exit");
 
         for (uint32_t c = 0; c < keycount && found == false; ++c) {
 
@@ -3302,7 +3597,7 @@ static int CmdT55xxBruteForce(const char *Cmd) {
         return PM3_EINVARG;
     }
 
-    PrintAndLogEx(INFO, "press " _GREEN_("<Enter>") " to exit");
+    PrintAndLogEx(INFO, "Press " _GREEN_("<Enter>") " to exit");
     PrintAndLogEx(INFO, "Search password range [%08X -> %08X]", start_password, end_password);
 
     uint64_t t1 = msclock();
@@ -3413,7 +3708,7 @@ static int CmdT55xxRecoverPW(const char *Cmd) {
     else if (r3)
         downlink_mode = ref1of4;
 
-    PrintAndLogEx(INFO, "press " _GREEN_("<Enter>") " to exit");
+    PrintAndLogEx(INFO, "Press " _GREEN_("<Enter>") " to exit");
 
     int bit = 0;
     uint32_t curr_password = 0x0;
@@ -3498,11 +3793,12 @@ out:
 // some return all page 1 (64 bits) and others return just that block (32 bits)
 // unfortunately the 64 bits makes this more likely to get a false positive...
 bool tryDetectP1(bool getData) {
-    uint8_t  preamble[] = {1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1};
-    size_t   startIdx   = 0;
-    uint8_t  fc1        = 0, fc2 = 0, ans = 0;
-    int      clk        = 0, firstClockEdge = 0;
-    bool     st         = true;
+    uint8_t preamble_atmel[] = {1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1};
+    uint8_t preamble_silicon[] = {1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 1};
+    size_t startIdx = 0;
+    uint8_t fc1 = 0, fc2 = 0, ans = 0;
+    int clk = 0, firstClockEdge = 0;
+    bool st = true;
 
     if (getData) {
         if (!AcquireData(T55x7_PAGE1, T55x7_TRACE_BLOCK1, false, 0, 0))
@@ -3512,15 +3808,29 @@ bool tryDetectP1(bool getData) {
     // try fsk clock detect. if successful it cannot be any other type of modulation...  (in theory...)
     ans = fskClocks(&fc1, &fc2, (uint8_t *)&clk, &firstClockEdge);
     if (ans && ((fc1 == 10 && fc2 == 8) || (fc1 == 8 && fc2 == 5))) {
-        if ((FSKrawDemod(0, 0, 0, 0, false) == PM3_SUCCESS) &&
-                preambleSearchEx(g_DemodBuffer, preamble, sizeof(preamble), &g_DemodBufferLen, &startIdx, false) &&
-                (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
-            return true;
+
+        if (FSKrawDemod(0, 0, 0, 0, false) == PM3_SUCCESS) {
+            if (preambleSearchEx(g_DemodBuffer, preamble_atmel, sizeof(preamble_atmel), &g_DemodBufferLen, &startIdx, false) &&
+                    (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
+                return true;
+            }
+
+            if (preambleSearchEx(g_DemodBuffer, preamble_silicon, sizeof(preamble_silicon), &g_DemodBufferLen, &startIdx, false) &&
+                    (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
+                return true;
+            }
         }
-        if ((FSKrawDemod(0, 1, 0, 0, false) == PM3_SUCCESS) &&
-                preambleSearchEx(g_DemodBuffer, preamble, sizeof(preamble), &g_DemodBufferLen, &startIdx, false) &&
-                (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
-            return true;
+
+        if (FSKrawDemod(0, 1, 0, 0, false) == PM3_SUCCESS) {
+            if (preambleSearchEx(g_DemodBuffer, preamble_atmel, sizeof(preamble_atmel), &g_DemodBufferLen, &startIdx, false) &&
+                    (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
+                return true;
+            }
+
+            if (preambleSearchEx(g_DemodBuffer, preamble_silicon, sizeof(preamble_silicon), &g_DemodBufferLen, &startIdx, false) &&
+                    (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
+                return true;
+            }
         }
         return false;
     }
@@ -3528,44 +3838,82 @@ bool tryDetectP1(bool getData) {
     // try ask clock detect.  it could be another type even if successful.
     clk = GetAskClock("", false);
     if (clk > 0) {
-        if ((ASKDemod_ext(0, 0, 1, 0, false, false, false, 1, &st) == PM3_SUCCESS) &&
-                preambleSearchEx(g_DemodBuffer, preamble, sizeof(preamble), &g_DemodBufferLen, &startIdx, false) &&
-                (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
-            return true;
+        if (ASKDemod_ext(0, 0, 1, 0, false, false, false, 1, &st) == PM3_SUCCESS) {
+
+            if (preambleSearchEx(g_DemodBuffer, preamble_atmel, sizeof(preamble_atmel), &g_DemodBufferLen, &startIdx, false) &&
+                    (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
+                return true;
+            }
+
+            if (preambleSearchEx(g_DemodBuffer, preamble_silicon, sizeof(preamble_silicon), &g_DemodBufferLen, &startIdx, false) &&
+                    (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
+                return true;
+            }
         }
 
         st = true;
-        if ((ASKDemod_ext(0, 1, 1, 0, false, false, false, 1, &st) == PM3_SUCCESS) &&
-                preambleSearchEx(g_DemodBuffer, preamble, sizeof(preamble), &g_DemodBufferLen, &startIdx, false) &&
-                (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
-            return true;
+        if (ASKDemod_ext(0, 1, 1, 0, false, false, false, 1, &st) == PM3_SUCCESS) {
+            if (preambleSearchEx(g_DemodBuffer, preamble_atmel, sizeof(preamble_atmel), &g_DemodBufferLen, &startIdx, false) &&
+                    (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
+                return true;
+            }
+
+            if (preambleSearchEx(g_DemodBuffer, preamble_silicon, sizeof(preamble_silicon), &g_DemodBufferLen, &startIdx, false) &&
+                    (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
+                return true;
+            }
         }
 
-        if ((ASKbiphaseDemod(0, 0, 0, 2, false) == PM3_SUCCESS) &&
-                preambleSearchEx(g_DemodBuffer, preamble, sizeof(preamble), &g_DemodBufferLen, &startIdx, false) &&
-                (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
-            return true;
+        if (ASKbiphaseDemod(0, 0, 0, 2, false) == PM3_SUCCESS) {
+            if (preambleSearchEx(g_DemodBuffer, preamble_atmel, sizeof(preamble_atmel), &g_DemodBufferLen, &startIdx, false) &&
+                    (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
+                return true;
+            }
+
+            if (preambleSearchEx(g_DemodBuffer, preamble_silicon, sizeof(preamble_silicon), &g_DemodBufferLen, &startIdx, false) &&
+                    (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
+                return true;
+            }
         }
 
-        if ((ASKbiphaseDemod(0, 0, 1, 2, false) == PM3_SUCCESS) &&
-                preambleSearchEx(g_DemodBuffer, preamble, sizeof(preamble), &g_DemodBufferLen, &startIdx, false) &&
-                (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
-            return true;
+        if (ASKbiphaseDemod(0, 0, 1, 2, false) == PM3_SUCCESS) {
+            if (preambleSearchEx(g_DemodBuffer, preamble_atmel, sizeof(preamble_atmel), &g_DemodBufferLen, &startIdx, false) &&
+                    (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
+                return true;
+            }
+
+            if (preambleSearchEx(g_DemodBuffer, preamble_silicon, sizeof(preamble_silicon), &g_DemodBufferLen, &startIdx, false) &&
+                    (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
+                return true;
+            }
         }
     }
 
     // try NRZ clock detect.  it could be another type even if successful.
     clk = GetNrzClock("", false); //has the most false positives :(
     if (clk > 0) {
-        if ((NRZrawDemod(0, 0, 1, false) == PM3_SUCCESS) &&
-                preambleSearchEx(g_DemodBuffer, preamble, sizeof(preamble), &g_DemodBufferLen, &startIdx, false) &&
-                (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
-            return true;
+        if (NRZrawDemod(0, 0, 1, false) == PM3_SUCCESS) {
+            if (preambleSearchEx(g_DemodBuffer, preamble_atmel, sizeof(preamble_atmel), &g_DemodBufferLen, &startIdx, false) &&
+                    (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
+                return true;
+            }
+
+            if (preambleSearchEx(g_DemodBuffer, preamble_silicon, sizeof(preamble_silicon), &g_DemodBufferLen, &startIdx, false) &&
+                    (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
+                return true;
+            }
         }
-        if ((NRZrawDemod(0, 1, 1, false) == PM3_SUCCESS)  &&
-                preambleSearchEx(g_DemodBuffer, preamble, sizeof(preamble), &g_DemodBufferLen, &startIdx, false) &&
-                (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
-            return true;
+
+        if (NRZrawDemod(0, 1, 1, false) == PM3_SUCCESS) {
+            if (preambleSearchEx(g_DemodBuffer, preamble_atmel, sizeof(preamble_atmel), &g_DemodBufferLen, &startIdx, false) &&
+                    (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
+                return true;
+            }
+
+            if (preambleSearchEx(g_DemodBuffer, preamble_silicon, sizeof(preamble_silicon), &g_DemodBufferLen, &startIdx, false) &&
+                    (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
+                return true;
+            }
         }
     }
 
@@ -3577,33 +3925,54 @@ bool tryDetectP1(bool getData) {
         // save_restoreGB(GRAPH_SAVE);
         // skip first 160 samples to allow antenna to settle in (psk gets inverted occasionally otherwise)
         //CmdLtrim("-i 160");
-        if ((PSKDemod(0, 0, 6, false) == PM3_SUCCESS) &&
-                preambleSearchEx(g_DemodBuffer, preamble, sizeof(preamble), &g_DemodBufferLen, &startIdx, false) &&
-                (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
+        if (PSKDemod(0, 0, 6, false) == PM3_SUCCESS) {
             //save_restoreGB(GRAPH_RESTORE);
-            return true;
+            if (preambleSearchEx(g_DemodBuffer, preamble_atmel, sizeof(preamble_atmel), &g_DemodBufferLen, &startIdx, false) &&
+                    (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
+                return true;
+            }
+
+            if (preambleSearchEx(g_DemodBuffer, preamble_silicon, sizeof(preamble_silicon), &g_DemodBufferLen, &startIdx, false) &&
+                    (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
+                return true;
+            }
         }
-        if ((PSKDemod(0, 1, 6, false) == PM3_SUCCESS) &&
-                preambleSearchEx(g_DemodBuffer, preamble, sizeof(preamble), &g_DemodBufferLen, &startIdx, false) &&
-                (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
+
+        if (PSKDemod(0, 1, 6, false) == PM3_SUCCESS) {
             //save_restoreGB(GRAPH_RESTORE);
-            return true;
+            if (preambleSearchEx(g_DemodBuffer, preamble_atmel, sizeof(preamble_atmel), &g_DemodBufferLen, &startIdx, false) &&
+                    (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
+                return true;
+            }
+
+            if (preambleSearchEx(g_DemodBuffer, preamble_silicon, sizeof(preamble_silicon), &g_DemodBufferLen, &startIdx, false) &&
+                    (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
+                return true;
+            }
         }
+
         // PSK2 - needs a call to psk1TOpsk2.
         if (PSKDemod(0, 0, 6, false) == PM3_SUCCESS) {
             psk1TOpsk2(g_DemodBuffer, g_DemodBufferLen);
-            if (preambleSearchEx(g_DemodBuffer, preamble, sizeof(preamble), &g_DemodBufferLen, &startIdx, false) &&
+
+            //save_restoreGB(GRAPH_RESTORE);
+            if (preambleSearchEx(g_DemodBuffer, preamble_atmel, sizeof(preamble_atmel), &g_DemodBufferLen, &startIdx, false) &&
                     (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
-                //save_restoreGB(GRAPH_RESTORE);
+                return true;
+            }
+
+            if (preambleSearchEx(g_DemodBuffer, preamble_silicon, sizeof(preamble_silicon), &g_DemodBufferLen, &startIdx, false) &&
+                    (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
                 return true;
             }
         } // inverse waves does not affect PSK2 demod
         //undo trim samples
         //save_restoreGB(GRAPH_RESTORE);
         // no other modulation clocks = 2 or 4 so quit searching
-        if (fc1 != 8) return false;
+        if (fc1 != 8) {
+            return false;
+        }
     }
-
     return false;
 }
 //  does this need to be a callable command?
@@ -3897,7 +4266,7 @@ static int CmdT55xxProtect(const char *Cmd) {
     return PM3_SUCCESS;
 }
 
-// if the difference between a and b is less then or eq to d  i.e. does a = b +/- d
+// if the difference between a and b is less than or eq to d  i.e. does a = b +/- d
 #define APPROX_EQ(a, b, d) ((abs(a - b) <= d) ? true : false)
 
 static uint8_t t55sniff_get_packet(const int *pulseBuffer, char *data, uint8_t width0, uint8_t width1, uint8_t tolerance) {
@@ -4139,8 +4508,9 @@ static int CmdT55xxSniff(const char *Cmd) {
                         blockAddr = 0;
                         for (uint8_t i = 3; i < 6; i++) {
                             blockAddr <<= 1;
-                            if (data[i] == '1')
+                            if (data[i] == '1') {
                                 blockAddr |= 1;
+                            }
                         }
                         blockData = 0;
                         have_data = true;
@@ -4155,21 +4525,26 @@ static int CmdT55xxSniff(const char *Cmd) {
                         usedPassword = 0;
                         for (uint8_t i = 2; i <= 33; i++) {
                             usedPassword <<= 1;
-                            if (data[i] == '1')
+                            if (data[i] == '1') {
                                 usedPassword |= 1;
+                            }
                         }
+
                         // Lock bit 34
                         blockData = 0;
                         for (uint8_t i = 35; i <= 66; i++) {
                             blockData <<= 1;
-                            if (data[i] == '1')
+                            if (data[i] == '1') {
                                 blockData |= 1;
+                            }
                         }
+
                         blockAddr = 0;
                         for (uint8_t i = 67; i <= 69; i++) {
                             blockAddr <<= 1;
-                            if (data[i] == '1')
+                            if (data[i] == '1') {
                                 blockAddr |= 1;
+                            }
                         }
                         have_data = true;
                         modeText = "Default pwd write";
@@ -4190,20 +4565,24 @@ static int CmdT55xxSniff(const char *Cmd) {
                         blockData = 0;
                         for (uint8_t i = 3; i <= 34; i++) {
                             blockData <<= 1;
-                            if (data[i] == '1')
+                            if (data[i] == '1') {
                                 blockData |= 1;
+                            }
                         }
+
                         for (uint8_t i = 2; i <= 33; i++) {
                             usedPassword <<= 1;
                             if (data[i] == '1') {
                                 usedPassword |= 1;
                             }
                         }
+
                         blockAddr = 0;
                         for (uint8_t i = 35; i <= 37; i++) {
                             blockAddr <<= 1;
-                            if (data[i] == '1')
+                            if (data[i] == '1') {
                                 blockAddr |= 1;
+                            }
                         }
                         have_data = true;
                         modeText = "Default write/pwd read";
@@ -4227,21 +4606,27 @@ static int CmdT55xxSniff(const char *Cmd) {
                         usedPassword = 0;
                         for (uint8_t i = 5; i <= 36; i++) {
                             usedPassword <<= 1;
-                            if (data[i] == '1')
+                            if (data[i] == '1') {
                                 usedPassword |= 1;
+                            }
                         }
+
                         blockData = 0;
                         for (uint8_t i = 38; i <= 69; i++) {
                             blockData <<= 1;
-                            if (data[i] == '1')
+                            if (data[i] == '1') {
                                 blockData |= 1;
+                            }
                         }
+
                         blockAddr = 0;
                         for (uint8_t i = 70; i <= 72; i++) {
                             blockAddr <<= 1;
-                            if (data[i] == '1')
+                            if (data[i] == '1') {
                                 blockAddr |= 1;
+                            }
                         }
+
                         have_data = true;
                         modeText = "Leading 0 pwd write";
                         snprintf(pwdText, sizeof(pwdText), " %08X", usedPassword);
@@ -4253,10 +4638,29 @@ static int CmdT55xxSniff(const char *Cmd) {
 
         // Print results
         if (have_data) {
-            if (blockAddr == 7)
-                PrintAndLogEx(SUCCESS, "%-22s  | "_GREEN_("%10s")" | "_YELLOW_("%8s")" |  "_YELLOW_("%d")"  |   "_GREEN_("%d")"  | %3d | %3d | %s", modeText, pwdText, dataText, blockAddr, page, minWidth, maxWidth, data);
-            else
-                PrintAndLogEx(SUCCESS, "%-22s  | "_GREEN_("%10s")" | "_GREEN_("%8s")" |  "_GREEN_("%d")"  |   "_GREEN_("%d")"  | %3d | %3d | %s", modeText, pwdText, dataText, blockAddr, page, minWidth, maxWidth, data);
+            if (blockAddr == 7) {
+                PrintAndLogEx(SUCCESS, "%-22s  | "_GREEN_("%10s")" | "_YELLOW_("%8s")" |  "_YELLOW_("%d")"  |   "_GREEN_("%d")"  | %3d | %3d | %s"
+                              , modeText
+                              , pwdText
+                              , dataText
+                              , blockAddr
+                              , page
+                              , minWidth
+                              , maxWidth
+                              , data
+                             );
+            } else {
+                PrintAndLogEx(SUCCESS, "%-22s  | "_GREEN_("%10s")" | "_GREEN_("%8s")" |  "_GREEN_("%d")"  |   "_GREEN_("%d")"  | %3d | %3d | %s"
+                              , modeText
+                              , pwdText
+                              , dataText
+                              , blockAddr
+                              , page
+                              , minWidth
+                              , maxWidth
+                              , data
+                             );
+            }
         }
     }
 
@@ -4289,7 +4693,7 @@ static command_t CommandTable[] = {
     {"write",        CmdT55xxWriteBlock,      IfPm3Lf,         "Write T55xx block data"},
     {"-----------",  CmdHelp,                 AlwaysAvailable, "--------------------- " _CYAN_("recovery") " ---------------------"},
     {"bruteforce",   CmdT55xxBruteForce,      IfPm3Lf,         "Simple bruteforce attack to find password"},
-    {"chk",          CmdT55xxChkPwds,         IfPm3Lf,         "Check passwords from dictionary/flash"},
+    {"chk",          CmdT55xxChkPwds,         IfPm3Lf,         "Check passwords"},
     {"protect",      CmdT55xxProtect,         IfPm3Lf,         "Password protect tag"},
     {"recoverpw",    CmdT55xxRecoverPW,       IfPm3Lf,         "Try to recover from bad password write from a cloner"},
     {"sniff",        CmdT55xxSniff,           AlwaysAvailable, "Attempt to recover T55xx commands from sample buffer"},
@@ -4309,3 +4713,21 @@ int CmdLFT55XX(const char *Cmd) {
     return CmdsParse(CommandTable, Cmd);
 }
 
+
+/*
+
+one of
+// Leading 0
+lf t55 write -b 3 --pg1 -d 90000800
+
+// 1 of 4
+lf t55 write -b 3 --pg1 -d 90000C00
+
+
+T55xx clone card lock: block 3 page 1 0x00000020                  00000000 00000000 00000000 00100000
+
+(this bit in any combo seems to lock the card)
+
+You can have other data in the block write, but if that single bit is set "1" the entire card locks in its current state; no know way to unlock
+
+*/

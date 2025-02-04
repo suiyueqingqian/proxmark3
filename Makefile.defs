@@ -53,7 +53,7 @@ USERMOD = usermod -aG
 ADDUSER = adduser
 GETENT_BL = getent group bluetooth
 
-
+PYTHON3_PKGCONFIG ?=   python3
 
 PATHSEP=/
 PREFIX ?=              /usr/local
@@ -170,6 +170,8 @@ GCCEXTRACFLAGS += -Wold-style-declaration -Wno-error=old-style-declaration
 GCCEXTRACFLAGS += -Woverride-init
 GCCEXTRACFLAGS += -Wshift-negative-value
 GCCEXTRACFLAGS += -Wunused-but-set-parameter -Wno-error=unused-but-set-parameter
+# enable gcc static analysis
+GCCEXTRACFLAGS += -fanalyzer
 ifeq ($(GCCEXTRA),1)
   DEFCFLAGS += $(GCCEXTRACFLAGS) $(EXTRACFLAGS)
 endif

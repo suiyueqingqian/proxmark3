@@ -23,6 +23,7 @@
 #include "bruteforce.h"
 
 #define EM4X50_NO_WORDS             34
+#define EM4X50_SIZE_WORD            4
 
 // special words
 #define EM4X50_DEVICE_PASSWORD      0
@@ -53,8 +54,8 @@
 #define EM4X50_COMMAND_STANDARD_READ        0x02 // virtual command
 
 // misc
-#define TIMEOUT_CMD                 3000
-#define DUMP_FILESIZE               136
+#define EM4X50_TIMEOUT_CMD                 3000
+#define EM4X50_DUMP_FILESIZE               136
 
 typedef struct {
     bool addr_given;
@@ -71,6 +72,12 @@ typedef struct {
     uint8_t byte[4];
 } PACKED em4x50_word_t;
 
+typedef struct {
+    uint8_t count;
+    uint32_t *words;
+} PACKED em4x50_read_data_response_t;
+
+// Global variables...
 extern bool g_Login;
 extern bool g_WritePasswordProcess;
 extern uint32_t g_Password;

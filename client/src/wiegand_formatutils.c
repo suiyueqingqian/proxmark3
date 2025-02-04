@@ -148,7 +148,7 @@ static uint8_t get_length_from_header(wiegand_message_t *data) {
             len = 32;
         } else {
 
-            printf("hid preamble detected\n");
+            PrintAndLogEx(DEBUG, "hid preamble detected");
             len = 32;
 
             if ((data->Mid ^ 0x20) == 0) { hfmt = data->Bot; len = 0; }
@@ -165,7 +165,7 @@ static uint8_t get_length_from_header(wiegand_message_t *data) {
         len = 0;
     }
 
-    while (hfmt > 1) {
+    while (hfmt > 0) {
         hfmt >>= 1;
         len++;
     }
@@ -196,6 +196,10 @@ bool add_HID_header(wiegand_message_t *data) {
     if (data->Length > 84 || data->Length == 0)
         return false;
 
+    if (data->Length == 48) {
+        data->Mid |= 1U << (data->Length - 32); // Example leading 1: start bit
+        return true;
+    }
     if (data->Length >= 64) {
         data->Top |= 0x09e00000; // Extended-length header
         data->Top |= 1U << (data->Length - 64); // leading 1: start bit

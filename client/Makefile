@@ -37,10 +37,10 @@ OBJDIR = obj
 ifeq ($(USE_BREW),1)
 	INCLUDES += -I$(BREW_PREFIX)/include
 	LDLIBS += -L$(BREW_PREFIX)/lib
-	PKG_CONFIG_ENV := PKG_CONFIG_PATH=$(BREW_PREFIX)/lib/pkgconfig:$(BREW_PREFIX)/opt/qt/lib/pkgconfig:$(BREW_PREFIX)/opt/qt5/lib/pkgconfig
+	PKG_CONFIG_ENV := PKG_CONFIG_PATH=$(BREW_PREFIX)/lib/pkgconfig:$(BREW_PREFIX)/opt/qt@5/lib/pkgconfig:$(BREW_PREFIX)/opt/qt@5/lib/pkgconfig
 endif
 
-ifdef ($(USE_MACPORTS),1)
+ifeq ($(USE_MACPORTS),1)
 	INCLUDES += -I$(MACPORTS_PREFIX)/include
 	LDLIBS += -L$(MACPORTS_PREFIX)/lib
 	PKG_CONFIG_ENV := PKG_CONFIG_PATH=$(MACPORTS_PREFIX)/lib/pkgconfig
@@ -70,6 +70,12 @@ HARDNESTEDLIBPATH = ./deps/hardnested
 HARDNESTEDLIBINC = -I$(HARDNESTEDLIBPATH)
 HARDNESTEDLIB = $(HARDNESTEDLIBPATH)/libhardnested.a
 HARDNESTEDLIBLD =
+
+## ID48
+ID48LIBPATH = ./deps/id48
+ID48LIBINC = -I$(ID48LIBPATH)
+ID48LIB = $(ID48LIBPATH)/libid48.a
+ID48LIBLD =
 
 ## Jansson
 JANSSONLIBPATH = ./deps/jansson
@@ -157,17 +163,23 @@ STATICLIBS += $(HARDNESTEDLIB)
 LDLIBS +=$(HARDNESTEDLIBLD)
 PM3INCLUDES += $(HARDNESTEDLIBINC)
 
+## ID48
+# not distributed as system library
+STATICLIBS += $(ID48LIB)
+LDLIBS += $(ID48LIBLD)
+PM3INCLUDES += $(ID48LIBINC)
+
 ## Linenoise
 # wait to see if Readline is available
 
 ## Lua
 ifneq ($(SKIPLUASYSTEM),1)
     ifdef MACPORTS_PREFIX
-        LUAINCLUDES = $(shell $(PKG_CONFIG_ENV) pkg-config --cflags lua-5.2 2>/dev/null)
-        LUALDLIBS = $(shell $(PKG_CONFIG_ENV) pkg-config --libs lua-5.2 2>/dev/null)
+        LUAINCLUDES = $(shell $(PKG_CONFIG_ENV) pkg-config --cflags lua-5.4 2>/dev/null)
+        LUALDLIBS = $(shell $(PKG_CONFIG_ENV) pkg-config --libs lua-5.4 2>/dev/null)
     else
-        LUAINCLUDES = $(shell $(PKG_CONFIG_ENV) pkg-config --cflags lua5.2 2>/dev/null)
-        LUALDLIBS = $(shell $(PKG_CONFIG_ENV) pkg-config --libs lua5.2 2>/dev/null)
+        LUAINCLUDES = $(shell $(PKG_CONFIG_ENV) pkg-config --cflags lua5.4 2>/dev/null)
+        LUALDLIBS = $(shell $(PKG_CONFIG_ENV) pkg-config --libs lua5.4 2>/dev/null)
     endif
     ifneq ($(LUALDLIBS),)
         LUALIB =
@@ -242,6 +254,9 @@ endif
 ## BZIP2
 LDLIBS += -lbz2
 
+## LZ4
+LDLIBS += -llz4
+
 ## Bluez (optional)
 ifneq ($(SKIPBT),1)
     BTINCLUDES = $(shell $(PKG_CONFIG_ENV) pkg-config --cflags bluez 2>/dev/null)
@@ -266,19 +281,19 @@ endif
 
 ## Python3 (optional)
 ifneq ($(SKIPPYTHON),1)
-    PYTHONINCLUDES = $(shell $(PKG_CONFIG_ENV) pkg-config --cflags python3 2>/dev/null)
-    PYTHONLDLIBS = $(shell $(PKG_CONFIG_ENV) pkg-config --libs python3 2>/dev/null)
+# since python3.8, applications willing to embed python must use -embed:
+    PYTHONINCLUDES = $(shell $(PKG_CONFIG_ENV) pkg-config --cflags $(PYTHON3_PKGCONFIG)-embed 2>/dev/null)
+    PYTHONLDLIBS = $(shell $(PKG_CONFIG_ENV) pkg-config --libs $(PYTHON3_PKGCONFIG)-embed 2>/dev/null)
     ifneq ($(PYTHONLDLIBS),)
         PYTHONLIBLD = $(PYTHONLDLIBS)
-        PYTHONLIBINC = $(PYTHONINCLUDES)
+        PYTHONLIBINC = $(subst -I,-isystem ,$(PYTHONINCLUDES))
         PYTHON_FOUND = 1
     else
-        # since python3.8, applications willing to embed python must use -embed:
-        PYTHONINCLUDES = $(shell $(PKG_CONFIG_ENV) pkg-config --cflags python3-embed 2>/dev/null)
-        PYTHONLDLIBS = $(shell $(PKG_CONFIG_ENV) pkg-config --libs python3-embed 2>/dev/null)
+        PYTHONINCLUDES = $(shell $(PKG_CONFIG_ENV) pkg-config --cflags $(PYTHON3_PKGCONFIG) 2>/dev/null)
+        PYTHONLDLIBS = $(shell $(PKG_CONFIG_ENV) pkg-config --libs $(PYTHON3_PKGCONFIG) 2>/dev/null)
         ifneq ($(PYTHONLDLIBS),)
             PYTHONLIBLD = $(PYTHONLDLIBS)
-            PYTHONLIBINC = $(PYTHONINCLUDES)
+            PYTHONLIBINC = $(subst -I,-isystem ,$(PYTHONINCLUDES))
             PYTHON_FOUND = 1
         endif
     endif
@@ -329,6 +344,17 @@ endif
 LDLIBS += $(QTLDLIBS)
 CXXINCLUDES += $(QTINCLUDES)
 
+## GD (optional)
+ifneq ($(SKIPGD),1)
+    GDINCLUDES = $(shell $(PKG_CONFIG_ENV) pkg-config --cflags gdlib 2>/dev/null)
+    GDLDLIBS = $(shell $(PKG_CONFIG_ENV) pkg-config --libs gdlib 2>/dev/null)
+    ifneq ($(GDLDLIBS),)
+        LDLIBS += $(GDLDLIBS)
+        PM3INCLUDES += $(GDINCLUDES)
+        GD_FOUND = 1
+    endif
+endif
+
 ## Readline
 ifneq ($(SKIPREADLINE),1)
     ifeq ($(USE_BREW),1)
@@ -368,12 +394,16 @@ ifeq ($(PYTHON_FOUND),1)
 endif
 
 #######################################################################################################
+# clang doesn't like this params
+#MYCFLAGS += --param max-completely-peeled-insns=1000 --param max-completely-peel-times=10000
+MYCFLAGS += -O3
+
 CFLAGS ?= $(DEFCFLAGS)
 CFLAGS += $(MYDEFS) $(MYCFLAGS) $(MYINCLUDES)
 
 # We cannot just use CFLAGS+=... because it has impact on sub-makes if CFLAGS is defined in env:
 PM3CFLAGS = $(CFLAGS)
-PM3CFLAGS += -g -I./src -I./include -I../include -I../common -I../common_fpga $(PM3INCLUDES) $(INCLUDES)
+PM3CFLAGS += -I./src -I./include -I../include -I../common -I../common_fpga $(PM3INCLUDES) $(INCLUDES)
 # WIP Testing
 #PM3CFLAGS += -std=c11 -pedantic
 
@@ -403,6 +433,10 @@ ifeq ($(PYTHON_FOUND),1)
     PM3CFLAGS += -DHAVE_PYTHON
 endif
 
+ifeq ($(GD_FOUND),1)
+    PM3CFLAGS += -DHAVE_GD
+endif
+
 ifeq ($(SWIG_LUA_FOUND),1)
     PM3CFLAGS += -DHAVE_LUA_SWIG
 endif
@@ -412,7 +446,7 @@ endif
 
 PM3CFLAGS += -DHAVE_SNPRINTF
 
-CXXFLAGS ?= -Wall -Werror -O3
+CXXFLAGS ?= -Wall -Werror
 CXXFLAGS += $(MYDEFS) $(MYCXXFLAGS) $(MYINCLUDES)
 
 PM3CXXFLAGS = $(CXXFLAGS)
@@ -497,9 +531,19 @@ ifeq ($(SKIPPYTHON),1)
         $(info Python3 library:   skipped)
 else
     ifeq ($(PYTHON_FOUND),1)
-        $(info Python3 library:   Python3 v$(shell $(PKG_CONFIG_ENV) pkg-config --modversion python3) found, enabled)
+        $(info Python3 library:   Python3 v$(shell $(PKG_CONFIG_ENV) pkg-config --modversion $(PYTHON3_PKGCONFIG)) found, enabled)
     else
         $(info Python3 library:   Python3 not found, disabled)
+    endif
+endif
+
+ifeq ($(SKIPGD),1)
+    $(info GD library:        skipped)
+else
+    ifeq ($(GD_FOUND),1)
+        $(info GD library:        GD v$(shell $(PKG_CONFIG_ENV) pkg-config --modversion gdlib) found, enabled)
+    else
+        $(info GD library:        GD not found, disabled)
     endif
 endif
 
@@ -580,6 +624,7 @@ SRCS =  mifare/aiddesfire.c \
 		cmdhfksx6924.c \
 		cmdhfcipurse.c \
 		cmdhficlass.c \
+		cmdhfict.c \
 		cmdhflegic.c \
 		cmdhfjooki.c \
 		cmdhflist.c \
@@ -598,7 +643,6 @@ SRCS =  mifare/aiddesfire.c \
 		cmdhftopaz.c \
 		cmdhftexkom.c \
 		cmdhfvas.c \
-		cmdhfwaveshare.c \
 		cmdhfxerox.c \
 		cmdhw.c \
 		cmdlf.c \
@@ -615,6 +659,7 @@ SRCS =  mifare/aiddesfire.c \
 		cmdlfgallagher.c \
 		cmdlfhid.c \
 		cmdlfhitag.c \
+		cmdlfhitaghts.c \
 		cmdlfidteck.c \
 		cmdlfindala.c \
 		cmdlfio.c \
@@ -648,6 +693,7 @@ SRCS =  mifare/aiddesfire.c \
 		crypto/asn1dump.c \
 		crypto/asn1utils.c\
 		crypto/libpcrypto.c\
+		crypto/originality.c\
 		emv/cmdemv.c \
 		emv/crypto.c\
 		emv/crypto_polarssl.c\
@@ -677,6 +723,7 @@ SRCS =  mifare/aiddesfire.c \
 		flash.c \
 		generator.c \
 		graph.c \
+		hidsio.c \
 		jansson_path.c \
 		iso4217.c \
 		iso7816/apduinfo.c \
@@ -685,17 +732,19 @@ SRCS =  mifare/aiddesfire.c \
 		loclass/cipherutils.c \
 		loclass/elite_crack.c \
 		loclass/ikeys.c \
+		lua_bitlib.c \
 		mifare/lrpcrypto.c \
 		mifare/desfirecrypto.c \
 		mifare/desfirecore.c \
-        mifare/desfiresecurechan.c \
-        mifare/desfiretest.c \
+		mifare/desfiresecurechan.c \
+		mifare/desfiretest.c \
 		mifare/gallaghercore.c \
 		mifare/mad.c \
 		mifare/mfkey.c \
 		mifare/mifare4.c \
 		mifare/mifaredefault.c \
 		mifare/mifarehost.c \
+		mifare/gen4.c \
 		nfc/ndef.c \
 		pm3.c \
 		pm3_binlib.c \
@@ -704,6 +753,8 @@ SRCS =  mifare/aiddesfire.c \
 		pm3line.c \
 		proxmark3.c \
 		scandir.c \
+		uart/ringbuffer.c \
+		uart/uart_common.c \
 		uart/uart_posix.c \
 		uart/uart_win32.c \
 		scripting.c \
@@ -715,6 +766,7 @@ SRCS =  mifare/aiddesfire.c \
 
 # common
 SRCS += bucketsort.c \
+		bruteforce.c \
 		cardhelper.c \
 		crapto1/crapto1.c \
 		crapto1/crypto1.c \
@@ -723,10 +775,17 @@ SRCS += bucketsort.c \
 		crc32.c \
 		crc64.c \
 		commonutil.c \
+		hitag2/hitag2_crypto.c \
 		iso15693tools.c \
 		legic_prng.c \
 		lfdemod.c \
 		util_posix.c
+
+ifeq ($(GD_FOUND),1)
+    # electronic shelf labels
+    SRCS += imgutils.c \
+	cmdhfwaveshare.c
+endif
 
 # swig
 
@@ -778,9 +837,13 @@ proxmark3: $(OBJS) $(STATICLIBS) lualibs/pm3_cmd.lua lualibs/mfc_default_keys.lu
 
 src/proxgui.cpp: src/ui/ui_overlays.h src/ui/ui_image.h
 
+src/proxguiqt.cpp: src/proxguiqt.h
+
 src/proxguiqt.moc.cpp: src/proxguiqt.h
 	$(info [-] MOC $@)
 	$(Q)$(MOC) -o$@ $^
+
+src/proxguiqt.h: src/ui/ui_overlays.h src/ui/ui_image.h
 
 src/ui/ui_overlays.h: src/ui/overlays.ui
 	$(info [-] UIC $@)
@@ -804,6 +867,7 @@ clean:
 	$(Q)$(MAKE) --no-print-directory -C $(AMIIBOLIBPATH) clean
 	$(Q)$(MAKE) --no-print-directory -C $(CLIPARSERLIBPATH) clean
 	$(Q)$(MAKE) --no-print-directory -C $(HARDNESTEDLIBPATH) clean
+	$(Q)$(MAKE) --no-print-directory -C $(ID48LIBPATH) clean
 	$(Q)$(MAKE) --no-print-directory -C $(JANSSONLIBPATH) clean
 ifeq ($(LINENOISE_LOCAL_FOUND), 1)
 	$(Q)$(MAKE) --no-print-directory -C $(LINENOISELIBPATH) clean
@@ -824,7 +888,6 @@ endif
 ifneq (,$(INSTALLSHARE))
 	    $(Q)$(INSTALLSUDO) $(MKDIR) $(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLSHARERELPATH)
 	    $(Q)$(INSTALLSUDO) $(CP) $(INSTALLSHARE) $(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLSHARERELPATH)
-	    $(Q)$(INSTALLSUDO) $(CP) src/pm3.py $(DESTDIR)$(PREFIX)$(PATHSEP)$(INSTALLSHARERELPATH)/pyscripts
 endif
 	@true
 
@@ -856,6 +919,10 @@ $(CLIPARSERLIB): .FORCE
 $(HARDNESTEDLIB): .FORCE
 	$(info [*] MAKE $@)
 	$(Q)$(MAKE) --no-print-directory -C $(HARDNESTEDLIBPATH) all
+
+$(ID48LIB): .FORCE
+	$(info [*] MAKE $@)
+	$(Q)$(MAKE) --no-print-directory -C $(ID48LIBPATH) all
 
 $(JANSSONLIB): .FORCE
 ifneq ($(JANSSON_FOUND),1)
@@ -911,10 +978,10 @@ src/pm3_pywrap.c: pm3.i
 
 .PHONY: all clean install uninstall tarbin .FORCE
 
-# version_pm3.c should be remade on every compilation
+# version_pm3.c should be checked on every compilation
 src/version_pm3.c: default_version_pm3.c .FORCE
-	$(info [=] GEN $@)
-	$(Q)$(SH) ../tools/mkversion.sh > $@ || $(CP) $< $@
+	$(info [=] CHECK $@)
+	$(Q)$(SH) ../tools/mkversion.sh $@ || $(CP) $< $@
 
 # easy printing of MAKE VARIABLES
 print-%: ; @echo $* = $($*)

@@ -200,7 +200,7 @@ static int jooki_create_ndef(uint8_t *b64ndef, uint8_t *ndefrecord) {
 static void jooki_printEx(uint8_t *b64, uint8_t *iv, uint8_t tid, uint8_t fid, uint8_t *uid, bool verbose) {
     int idx = jooki_lookup(tid, fid);
 
-    PrintAndLogEx(INFO, "Encoded URL.. %s ( %s )", sprint_hex(b64, 12), b64);
+    PrintAndLogEx(INFO, "Encoded URL.. %s ( " _YELLOW_("%s") " )", sprint_hex(b64, 12), b64);
     PrintAndLogEx(INFO, "Figurine..... %02x %02x - " _GREEN_("%s, %s")
                   , tid
                   , fid
@@ -238,7 +238,7 @@ static void jooki_print(uint8_t *b64, uint8_t *result, bool verbose) {
 
 static int jooki_selftest(void) {
 
-    PrintAndLogEx(INFO, "======== " _CYAN_("selftest") " ===========================================");
+    PrintAndLogEx(INFO, "======== " _CYAN_("self test") " ===========================================");
     for (int i = 0; i < ARRAYLEN(jooks); i++) {
         if (strlen(jooks[i].b64) == 0)
             continue;
@@ -286,7 +286,7 @@ static int CmdHF14AJookiEncode(const char *Cmd) {
     CLIParserContext *ctx;
     CLIParserInit(&ctx, "hf jooki encode",
                   "Encode a Jooki token to base64 NDEF URI format",
-                  "hf jooki encode -t            --> selftest\n"
+                  "hf jooki encode --test        --> self tests\n"
                   "hf jooki encode -r --dragon   --> read uid from tag and use for encoding\n"
                   "hf jooki encode --uid 04010203040506 --dragon\n"
                   "hf jooki encode --uid 04010203040506 --tid 1 --fid 1"
@@ -296,7 +296,7 @@ static int CmdHF14AJookiEncode(const char *Cmd) {
         arg_param_begin,
         arg_str0("u", "uid",  "<hex>", "uid bytes"),
         arg_lit0("r", NULL, "read uid from tag instead"),
-        arg_lit0("t", NULL, "selftest"),
+        arg_lit0(NULL, "test", "self test"),
         arg_lit0("v", "verbose", "verbose output"),
         arg_lit0(NULL, "dragon", "figurine type"),
         arg_lit0(NULL, "fox", "figurine type"),
@@ -442,8 +442,8 @@ static int CmdHF14AJookiDecode(const char *Cmd) {
         arg_param_end
     };
     CLIExecWithReturn(ctx, Cmd, argtable, false);
-    int dlen = 16;
     uint8_t b64[JOOKI_B64_LEN] = {0x00};
+    int dlen = sizeof(b64) - 1; // CLIGetStrWithReturn does not guarantee string to be null-terminated
     memset(b64, 0x0, sizeof(b64));
     CLIGetStrWithReturn(ctx, 1, b64, &dlen);
     bool verbose = arg_get_lit(ctx, 2);
@@ -471,8 +471,8 @@ static int CmdHF14AJookiSim(const char *Cmd) {
         arg_param_end
     };
     CLIExecWithReturn(ctx, Cmd, argtable, true);
-    int dlen = 16;
     uint8_t b64[JOOKI_B64_LEN] = {0x00};
+    int dlen = sizeof(b64) - 1; // CLIGetStrWithReturn does not guarantee string to be null-terminated
     memset(b64, 0x0, sizeof(b64));
     CLIGetStrWithReturn(ctx, 1, b64, &dlen);
     CLIParserFree(ctx);
@@ -521,33 +521,40 @@ static int CmdHF14AJookiSim(const char *Cmd) {
     mfu_dump->counter_tearing[2][3] = 0xBD;
     mfu_dump->pages = 0x2c;
 
-    printMFUdumpEx(mfu_dump, mfu_dump->pages + 1, 0);
+    mfu_print_dump(mfu_dump, mfu_dump->pages + 1, 0, false);
 
     // upload to emulator memory
     PrintAndLogEx(INFO, "Uploading to emulator memory");
-
     PrintAndLogEx(INFO, "." NOLF);
+
     // fast push mode
     g_conn.block_after_ACK = true;
     uint8_t blockwidth = 4, counter = 0, blockno = 0;
+
+    // 12 is the size of the struct the fct mf_eml_set_mem_xt uses to transfer to device
+    uint16_t max_avail_blocks = ((PM3_CMD_DATA_SIZE - 12) / blockwidth) * blockwidth;
+
     while (datalen) {
         if (datalen == blockwidth) {
             // Disable fast mode on last packet
             g_conn.block_after_ACK = false;
         }
+        uint16_t chunk_size = MIN(max_avail_blocks, datalen);
+        uint16_t blocks_to_send = chunk_size / blockwidth;
 
-        if (mfEmlSetMem_xt(data + counter, blockno, 1, blockwidth) != PM3_SUCCESS) {
+        if (mf_eml_set_mem_xt(data + counter, blockno, blocks_to_send, blockwidth) != PM3_SUCCESS) {
             PrintAndLogEx(FAILED, "Cant set emul block: %3d", blockno);
             free(data);
             return PM3_ESOFT;
         }
+        blockno += blocks_to_send;
+        counter += chunk_size;
+        datalen -= chunk_size;
         PrintAndLogEx(NORMAL, "." NOLF);
         fflush(stdout);
-        blockno++;
-        counter += blockwidth;
-        datalen -= blockwidth;
     }
-    PrintAndLogEx(NORMAL, "\n");
+    PrintAndLogEx(NORMAL, "");
+    PrintAndLogEx(SUCCESS, "uploaded " _YELLOW_("%d") " bytes to emulator memory", counter);
 
     struct {
         uint8_t tagtype;
@@ -558,7 +565,8 @@ static int CmdHF14AJookiSim(const char *Cmd) {
 
     // NTAG,  7 byte UID in eloaded data.
     payload.tagtype = 7;
-    payload.flags = FLAG_UID_IN_EMUL;
+    payload.flags = 0;
+    FLAG_SET_UID_IN_EMUL(payload.flags);
     payload.exitAfter = 0;
     memcpy(payload.uid, uid, sizeof(uid));
 
@@ -566,7 +574,9 @@ static int CmdHF14AJookiSim(const char *Cmd) {
     SendCommandNG(CMD_HF_ISO14443A_SIMULATE, (uint8_t *)&payload, sizeof(payload));
     PacketResponseNG resp;
 
-    PrintAndLogEx(INFO, "Press " _GREEN_("<Enter>") " or pm3-button to abort simulation");
+    PrintAndLogEx(NORMAL, "");
+    PrintAndLogEx(SUCCESS, "Starting simulating");
+    PrintAndLogEx(INFO, "Press " _GREEN_("pm3 button") " or " _GREEN_("<Enter>") " to abort simulation");
     for (;;) {
         if (kbd_enter_pressed()) {
             SendCommandNG(CMD_BREAK_LOOP, NULL, 0);
@@ -574,15 +584,15 @@ static int CmdHF14AJookiSim(const char *Cmd) {
             break;
         }
 
-        if (WaitForResponseTimeout(CMD_HF_MIFARE_SIMULATE, &resp, 1500) == 0)
+        if (WaitForResponseTimeout(CMD_HF_MIFARE_SIMULATE, &resp, 1500) == false)
             continue;
 
         if (resp.status != PM3_SUCCESS)
             break;
     }
     free(data);
-    PrintAndLogEx(INFO, "Done");
     PrintAndLogEx(HINT, "Try `" _YELLOW_("hf 14a list") "` to view trace log");
+    PrintAndLogEx(INFO, "Done!");
     return PM3_SUCCESS;
 }
 
@@ -602,8 +612,8 @@ static int CmdHF14AJookiClone(const char *Cmd) {
         arg_param_end
     };
     CLIExecWithReturn(ctx, Cmd, argtable, false);
-    int blen = 16;
     uint8_t b64[JOOKI_B64_LEN] = {0x00};
+    int blen = sizeof(b64) - 1; // CLIGetStrWithReturn does not guarantee string to be null-terminated
     memset(b64, 0x0, sizeof(b64));
     CLIGetStrWithReturn(ctx, 1, b64, &blen);
 
@@ -652,15 +662,15 @@ static int CmdHF14AJookiClone(const char *Cmd) {
             uint8_t isOK  = resp.oldarg[0] & 0xff;
             PrintAndLogEx(SUCCESS, "Write block %d ( %s )", blockno, isOK ? _GREEN_("ok") : _RED_("fail"));
         } else {
-            PrintAndLogEx(WARNING, "Command execute timeout");
+            PrintAndLogEx(WARNING, "command execution time out");
         }
 
         blockno++;
         i++;
     }
 
-    PrintAndLogEx(INFO, "Done");
     PrintAndLogEx(HINT, "Try `" _YELLOW_("hf mfu ndefread") "` to view");
+    PrintAndLogEx(INFO, "Done!");
     return PM3_SUCCESS;
 }
 

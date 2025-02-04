@@ -176,7 +176,7 @@ static int CmdVikingClone(const char *Cmd) {
         PrintAndLogEx(ERR, "Error occurred, device did not respond during write operation.");
         return PM3_ETIMEOUT;
     }
-    PrintAndLogEx(SUCCESS, "Done");
+    PrintAndLogEx(SUCCESS, "Done!");
     PrintAndLogEx(HINT, "Hint: try " _YELLOW_("`lf viking reader`") " to verify");
     return resp.status;
 }
@@ -231,9 +231,10 @@ static int CmdVikingSim(const char *Cmd) {
     PacketResponseNG resp;
     WaitForResponse(CMD_LF_ASK_SIMULATE, &resp);
 
-    PrintAndLogEx(INFO, "Done");
-    if (resp.status != PM3_EOPABORTED)
+    PrintAndLogEx(INFO, "Done!");
+    if (resp.status != PM3_EOPABORTED) {
         return resp.status;
+    }
     return PM3_SUCCESS;
 }
 
@@ -241,7 +242,7 @@ static command_t CommandTable[] = {
     {"help",    CmdHelp,        AlwaysAvailable, "This help"},
     {"demod",   CmdVikingDemod, AlwaysAvailable, "demodulate a Viking tag from the GraphBuffer"},
     {"reader",  CmdVikingReader,  IfPm3Lf,       "attempt to read and extract tag data"},
-    {"clone",   CmdVikingClone, IfPm3Lf,         "clone Viking tag to T55x7 or Q5/T5555"},
+    {"clone",   CmdVikingClone, IfPm3Lf,         "clone Viking tag to T55x7, Q5/T5555 or EM4305/4469"},
     {"sim",     CmdVikingSim,   IfPm3Lf,         "simulate Viking tag"},
     {NULL, NULL, NULL, NULL}
 };

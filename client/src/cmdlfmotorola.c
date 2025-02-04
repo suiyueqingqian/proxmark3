@@ -128,7 +128,7 @@ int demodMotorola(bool verbose) {
 static int CmdMotorolaDemod(const char *Cmd) {
     CLIParserContext *ctx;
     CLIParserInit(&ctx, "lf motorola demod",
-                  "Try to find Motorola preamble, if found decode / descramble data",
+                  "Try to find Motorola Flexpass preamble, if found decode / descramble data",
                   "lf motorola demod"
                  );
 
@@ -144,7 +144,7 @@ static int CmdMotorolaDemod(const char *Cmd) {
 static int CmdMotorolaReader(const char *Cmd) {
     CLIParserContext *ctx;
     CLIParserInit(&ctx, "lf motorola reader",
-                  "read a Motorola tag",
+                  "read a Motorola Flexpass tag",
                   "lf motorola reader -@   -> continuous reader mode"
                  );
 
@@ -172,7 +172,7 @@ static int CmdMotorolaReader(const char *Cmd) {
         .samples_to_skip = 4500,
         .verbose = false
     };
-    lf_config(&sc);
+    lf_setconfig(&sc);
 
     int res;
     do {
@@ -184,7 +184,7 @@ static int CmdMotorolaReader(const char *Cmd) {
     // reset back to 125 kHz
     sc.divisor = LF_DIVISOR_125;
     sc.samples_to_skip = 0;
-    lf_config(&sc);
+    lf_setconfig(&sc);
 
     return res;
 }
@@ -253,7 +253,7 @@ static int CmdMotorolaClone(const char *Cmd) {
     } else {
         res = clone_t55xx_tag(blocks, ARRAYLEN(blocks));
     }
-    PrintAndLogEx(SUCCESS, "Done");
+    PrintAndLogEx(SUCCESS, "Done!");
     PrintAndLogEx(HINT, "Hint: try " _YELLOW_("`lf motorola reader`") " to verify");
     return res;
 }

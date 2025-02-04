@@ -43,7 +43,7 @@ static int print_barcode(uint8_t *barcode, const size_t barcode_len, bool verbos
     if (verbose) {
         PrintAndLogEx(SUCCESS, "     Data format : "_YELLOW_("%02X"), barcode[1]);
         if (barcode_len > 2) {
-            uint8_t b1, b2;
+            uint8_t b1 = 0, b2 = 0;
             compute_crc(CRC_14443_A, barcode, barcode_len - 2, &b1, &b2);
             bool isok = (barcode[barcode_len - 1] == b1 && barcode[barcode_len - 2] == b2);
 
@@ -125,7 +125,7 @@ int infoThinFilm(bool verbose) {
     SendCommandNG(CMD_HF_THINFILM_READ, NULL, 0);
 
     PacketResponseNG resp;
-    if (!WaitForResponseTimeout(CMD_HF_THINFILM_READ, &resp, 1500)) {
+    if (WaitForResponseTimeout(CMD_HF_THINFILM_READ, &resp, 1500) == false) {
         PrintAndLogEx(WARNING, "timeout while waiting for reply.");
         return PM3_ETIMEOUT;
     }
@@ -173,7 +173,7 @@ int CmdHfThinFilmSim(const char *Cmd) {
     CLIParserFree(ctx);
 
     if (addcrc && data_len <= 510) {
-        uint8_t b1, b2;
+        uint8_t b1 = 0, b2 = 0;
         compute_crc(CRC_14443_A, data, data_len, &b1, &b2);
         data[data_len++] = b2;
         data[data_len++] = b1;
@@ -182,18 +182,25 @@ int CmdHfThinFilmSim(const char *Cmd) {
     clearCommandBuffer();
     SendCommandNG(CMD_HF_THINFILM_SIMULATE, (uint8_t *)&data, data_len);
     PacketResponseNG resp;
-    PrintAndLogEx(SUCCESS, "press pm3-button to abort simulation");
+    PrintAndLogEx(SUCCESS, "press " _GREEN_("pm3 button") " to abort simulation");
 
     int ret;
     while (!(ret = kbd_enter_pressed())) {
-        if (WaitForResponseTimeout(CMD_HF_THINFILM_SIMULATE, &resp, 500) == 0) continue;
-        if (resp.status != PM3_SUCCESS) break;
+
+        if (WaitForResponseTimeout(CMD_HF_THINFILM_SIMULATE, &resp, 500) == 0) {
+            continue;
+        }
+
+        if (resp.status != PM3_SUCCESS) {
+            break;
+        }
     }
+
     if (ret) {
         PrintAndLogEx(INFO, "Client side interrupted");
         PrintAndLogEx(WARNING, "Simulation still running on Proxmark3 till next command or button press");
     } else {
-        PrintAndLogEx(INFO, "Done");
+        PrintAndLogEx(INFO, "Done!");
     }
     return PM3_SUCCESS;
 }

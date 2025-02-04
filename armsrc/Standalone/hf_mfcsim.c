@@ -71,7 +71,8 @@ static bool fill_eml_from_file(char *dumpfile) {
 
     //read and load dump file
     if (g_dbglevel >= DBG_INFO) {
-        Dbprintf(_YELLOW_("Found dump file %s. Uploading to emulator memory..."), dumpfile);
+        Dbprintf("Found dump file... `" _YELLOW_("%s") "`", dumpfile);
+        Dbprintf("Uploading to emulator memory...");
     }
 
     emlClearMem();
@@ -142,7 +143,9 @@ void RunMod(void) {
 
         //Start to simulate
         Dbprintf(_YELLOW_("[Slot: %d] Simulation start, Press button to change next card."), i);
-        uint16_t simflags = FLAG_UID_IN_EMUL | FLAG_MF_1K;
+        uint16_t simflags = 0;
+        FLAG_SET_MF_SIZE(simflags, MIFARE_1K_MAX_BYTES);
+        FLAG_SET_UID_IN_EMUL(simflags);
         Mifare1ksim(simflags, 0, NULL, 0, 0);
         Dbprintf(_YELLOW_("[Slot: %d] Simulation end, Write Back to dump file!"), i);
 
