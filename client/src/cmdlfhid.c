@@ -44,6 +44,7 @@
 #include "wiegand_formats.h"
 #include "wiegand_formatutils.h"
 #include "cmdlfem4x05.h"  // EM defines
+#include "loclass/cipherutils.h"  // bitstreamout
 
 #ifndef BITS
 # define BITS 96
@@ -57,8 +58,9 @@ static int sendPing(void) {
     SendCommandNG(CMD_PING, NULL, 0);
     clearCommandBuffer();
     PacketResponseNG resp;
-    if (!WaitForResponseTimeout(CMD_PING, &resp, 1000))
+    if (WaitForResponseTimeout(CMD_PING, &resp, 1000) == false) {
         return PM3_ETIMEOUT;
+    }
     return PM3_SUCCESS;
 }
 static int sendTry(uint8_t format_idx, wiegand_card_t *card, uint32_t delay, bool verbose) {
@@ -116,10 +118,15 @@ int demodHID(bool verbose) {
     //raw fsk demod no manchester decoding no start bit finding just get binary from wave
     uint32_t hi2 = 0, hi = 0, lo = 0;
 
-    uint8_t bits[g_GraphTraceLen];
-    size_t size = getFromGraphBuf(bits);
+    uint8_t *bits = calloc(g_GraphTraceLen, sizeof(uint8_t));
+    if (bits == NULL) {
+        PrintAndLogEx(FAILED, "failed to allocate memory");
+        return PM3_EMALLOC;
+    }
+    size_t size = getFromGraphBuffer(bits);
     if (size == 0) {
         PrintAndLogEx(DEBUG, "DEBUG: Error - " _RED_("HID not enough samples"));
+        free(bits);
         return PM3_ESOFT;
     }
     //get binary from fsk wave
@@ -140,19 +147,20 @@ int demodHID(bool verbose) {
         else
             PrintAndLogEx(DEBUG, "DEBUG: Error - " _RED_("HID error demoding fsk %d"), idx);
 
+        free(bits);
         return PM3_ESOFT;
     }
 
     setDemodBuff(bits, size, idx);
     setClockGrid(50, waveIdx + (idx * 50));
+    free(bits);
 
     if (hi2 == 0 && hi == 0 && lo == 0) {
         PrintAndLogEx(DEBUG, "DEBUG: Error - " _RED_("HID no values found"));
         return PM3_ESOFT;
     }
 
-    wiegand_message_t packed = initialize_message_object(hi2, hi, lo, 0);
-    if (HIDTryUnpack(&packed) == false) {
+    if (!decode_wiegand(hi2, hi, lo, 0)) { // if failed to unpack wiegand
         printDemodBuff(0, false, false, true);
     }
     PrintAndLogEx(INFO, "raw: " _GREEN_("%08x%08x%08x"), hi2, hi, lo);
@@ -205,8 +213,8 @@ static int CmdHIDReader(const char *Cmd) {
     }
 
     do {
-        lf_read(false, 16000);
-        demodHID(!cm);
+        lf_read(false, 16000); // get data of 16000 samples from proxmark device
+        demodHID(!cm); // demod data and print results if found
     } while (cm && !kbd_enter_pressed());
 
     return PM3_SUCCESS;
@@ -231,7 +239,7 @@ static int CmdHIDWatch(const char *Cmd) {
     CLIParserFree(ctx);
 
     PrintAndLogEx(SUCCESS, "Watching for HID Prox cards - place tag on antenna");
-    PrintAndLogEx(INFO, "Press pm3-button to stop reading cards");
+    PrintAndLogEx(INFO, "Press " _GREEN_("pm3 button") " to stop reading cards");
     clearCommandBuffer();
     SendCommandNG(CMD_LF_HID_WATCH, NULL, 0);
     return lfsim_wait_check(CMD_LF_HID_WATCH);
@@ -367,8 +375,10 @@ static int CmdHIDClone(const char *Cmd) {
     bool q5 = arg_get_lit(ctx, 7);
     bool em = arg_get_lit(ctx, 8);
 
-    int bin_len = 63;
-    uint8_t bin[70] = {0};
+    // t5577 can do 6 blocks with 32bits == 192 bits, HID is manchester encoded and doubles in length.
+    // With parity, manchester and preamble we have about 3 blocks to play with.  Ie:  96 bits
+    uint8_t bin[97] = {0};
+    int bin_len = sizeof(bin) - 1; // CLIGetStrWithReturn does not guarantee string to be null-terminated
     CLIGetStrWithReturn(ctx, 9, bin, &bin_len);
     CLIParserFree(ctx);
 
@@ -377,8 +387,8 @@ static int CmdHIDClone(const char *Cmd) {
         return PM3_EINVARG;
     }
 
-    if (bin_len > 127) {
-        PrintAndLogEx(ERR, "Binary wiegand string must be less than 128 bits");
+    if (bin_len > 96) {
+        PrintAndLogEx(ERR, "Binary wiegand string must be less than 96 bits");
         return PM3_EINVARG;
     }
 
@@ -399,14 +409,32 @@ static int CmdHIDClone(const char *Cmd) {
         packed.Mid = mid;
         packed.Bot = bot;
     } else if (bin_len) {
-        int res = binstring_to_u96(&top, &mid, &bot, (const char *)bin);
-        if (res != bin_len) {
-            PrintAndLogEx(ERR, "Binary string contains none <0|1> chars");
-            return PM3_EINVARG;
+
+        uint8_t hex[12];
+        memset(hex, 0, sizeof(hex));
+        BitstreamOut_t bout = {hex, 0, 0 };
+
+        for (int i = 0; i < 96 - bin_len - 1; i++) {
+            pushBit(&bout, 0);
         }
-        packed.Top = top;
-        packed.Mid = mid;
-        packed.Bot = bot;
+        // add binary sentinel bit.
+        pushBit(&bout, 1);
+
+        // convert binary string to hex bytes
+        for (int i = 0; i < bin_len; i++) {
+            char c = bin[i];
+            if (c == '1')
+                pushBit(&bout, 1);
+            else if (c == '0')
+                pushBit(&bout, 0);
+        }
+
+        packed.Length = bin_len;
+        packed.Top = bytes_to_num(hex, 4);
+        packed.Mid = bytes_to_num(hex + 4, 4);
+        packed.Bot = bytes_to_num(hex + 8, 4);
+        add_HID_header(&packed);
+
     } else {
         if (HIDPack(format_idx, &card, &packed, true) == false) {
             PrintAndLogEx(WARNING, "The card data could not be encoded in the selected format.");
@@ -443,18 +471,19 @@ static int CmdHIDClone(const char *Cmd) {
 
     clearCommandBuffer();
     SendCommandNG(CMD_LF_HID_CLONE, (uint8_t *)&payload, sizeof(payload));
-
     PacketResponseNG resp;
-    WaitForResponse(CMD_LF_HID_CLONE, &resp);
-    if (resp.status == PM3_SUCCESS) {
-        PrintAndLogEx(INFO, "Done");
-    } else {
-        PrintAndLogEx(FAILED, "Failed cloning");
-        return resp.status;
+    if (WaitForResponseTimeout(CMD_LF_HID_CLONE, &resp, 2000) == false) {
+        PrintAndLogEx(WARNING, "timeout while waiting for reply.");
+        return PM3_ETIMEOUT;
     }
 
-    PrintAndLogEx(HINT, "Hint: try " _YELLOW_("`lf hid reader`") " to verify");
-    return PM3_SUCCESS;
+    if (resp.status == PM3_SUCCESS) {
+        PrintAndLogEx(SUCCESS, "Done!");
+        PrintAndLogEx(HINT, "Hint: try " _YELLOW_("`lf hid reader`") " to verify");
+    } else {
+        PrintAndLogEx(FAILED, "cloning ( " _RED_("fail") " )");
+    }
+    return resp.status;
 }
 
 /*
@@ -514,6 +543,7 @@ static int CmdHIDBrute(const char *Cmd) {
     }
 
     wiegand_card_t card_hi, card_low;
+    cardformatdescriptor_t card_descriptor = HIDGetCardFormat(format_idx).Fields;
     memset(&card_hi, 0, sizeof(wiegand_card_t));
 
     char field[3] = {0};
@@ -566,7 +596,7 @@ static int CmdHIDBrute(const char *Cmd) {
     }
     PrintAndLogEx(NORMAL, "");
     PrintAndLogEx(INFO, "Started bruteforcing HID Prox reader");
-    PrintAndLogEx(INFO, "Press " _GREEN_("<Enter>") " or pm3-button to abort simulation");
+    PrintAndLogEx(INFO, "Press " _GREEN_("pm3 button") " or " _GREEN_("<Enter>") " to abort simulation");
     PrintAndLogEx(NORMAL, "");
     // copy values to low.
     card_low = card_hi;
@@ -593,13 +623,13 @@ static int CmdHIDBrute(const char *Cmd) {
                 return PM3_ESOFT;
             }
             if (strcmp(field, "fc") == 0) {
-                if (card_hi.FacilityCode < 0xFF) {
+                if (card_hi.FacilityCode < card_descriptor.MaxFC) {
                     card_hi.FacilityCode++;
                 } else {
                     fin_hi = true;
                 }
             } else if (strcmp(field, "cn") == 0) {
-                if (card_hi.CardNumber < 0xFFFF) {
+                if (card_hi.CardNumber < card_descriptor.MaxCN) {
                     card_hi.CardNumber++;
                 } else {
                     fin_hi = true;
@@ -654,7 +684,7 @@ static command_t CommandTable[] = {
     {"help",    CmdHelp,        AlwaysAvailable, "this help"},
     {"demod",   CmdHIDDemod,    AlwaysAvailable, "demodulate HID Prox tag from the GraphBuffer"},
     {"reader",  CmdHIDReader,   IfPm3Lf,         "attempt to read and extract tag data"},
-    {"clone",   CmdHIDClone,    IfPm3Lf,         "clone HID tag to T55x7"},
+    {"clone",   CmdHIDClone,    IfPm3Lf,         "clone HID tag to T55x7, Q5/T5555 or EM4305/4469"},
     {"sim",     CmdHIDSim,      IfPm3Lf,         "simulate HID tag"},
     {"brute",   CmdHIDBrute,    IfPm3Lf,         "bruteforce facility code or card number against reader"},
     {"watch",   CmdHIDWatch,    IfPm3Lf,         "continuously watch for cards.  Reader mode"},

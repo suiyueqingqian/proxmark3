@@ -29,7 +29,6 @@
 #include "dbprint.h"
 #include "util.h"
 #include "commonutil.h"
-
 #include "crc16.h"
 #include "string.h"
 #include "printf.h"
@@ -38,13 +37,14 @@
 #include "protocols.h"
 #include "pmflash.h"
 #include "flashmem.h" // persistence on flash
-#include "appmain.h" // print stack
+#include "spiffs.h"   // spiffs
+#include "appmain.h"  // print stack
 
 /*
 Notes about EM4xxx timings.
 
 The timing values differs between cards,  we got EM410x,  EM43x5, EM445x  etc.
-We are trying to unify and enable the Proxmark to easily detect and select correct timings automatic.
+We are trying to unify and enable the Proxmark3 to easily detect and select correct timings automatic.
 The measures from datasheets doesn't always match correct the hardware features of RDV4 antenans and we still wanted to let other devices with other custom antennas
 still benefit from this repo.  This is why its configurable and we use to set these dynamic settings in device external flash memory.
 
@@ -208,7 +208,7 @@ static uint32_t GetT55xxClockBit(uint8_t clock) {
 
 void printT55xxConfig(void) {
 
-#define PRN_NA   sprintf(s  + strlen(s), _RED_("N/A") " | ");
+#define PRN_NA   sprintf(s  + strlen(s), _RED_("n/a") " | ");
 
     DbpString(_CYAN_("LF T55XX config"));
     Dbprintf("           [r]               [a]   [b]   [c]   [d]   [e]   [f]   [g]");
@@ -287,7 +287,7 @@ void printT55xxConfig(void) {
     DbpString("");
 }
 
-void setT55xxConfig(uint8_t arg0, t55xx_configurations_t *c) {
+void setT55xxConfig(uint8_t arg0, const t55xx_configurations_t *c) {
     for (uint8_t i = 0; i < 4; i++) {
         if (c->m[i].start_gap != 0)
             T55xx_Timing.m[i].start_gap = c->m[i].start_gap;
@@ -325,31 +325,7 @@ void setT55xxConfig(uint8_t arg0, t55xx_configurations_t *c) {
         return;
     }
 
-    if (!FlashInit()) {
-        BigBuf_free();
-        return;
-    }
-
-    uint8_t *buf = BigBuf_malloc(T55XX_CONFIG_LEN);
-    Flash_CheckBusy(BUSY_TIMEOUT);
-    uint16_t res = Flash_ReadDataCont(T55XX_CONFIG_OFFSET, buf, T55XX_CONFIG_LEN);
-    if (res == 0) {
-        FlashStop();
-        BigBuf_free();
-        return;
-    }
-
-    memcpy(buf, &T55xx_Timing, T55XX_CONFIG_LEN);
-
-    // delete old configuration
-    Flash_CheckBusy(BUSY_TIMEOUT);
-    Flash_WriteEnable();
-    Flash_Erase4k(3, 0xD);
-
-    // write new
-    res = Flash_Write(T55XX_CONFIG_OFFSET, buf, T55XX_CONFIG_LEN);
-
-    if (res == T55XX_CONFIG_LEN && g_dbglevel > 1) {
+    if (SPIFFS_OK == rdv40_spiffs_write(T55XX_CONFIG_FILE, (uint8_t *)&T55xx_Timing, T55XX_CONFIG_LEN, RDV40_SPIFFS_SAFETY_SAFE)) {
         DbpString("T55XX Config save " _GREEN_("success"));
     }
 
@@ -364,15 +340,23 @@ t55xx_configurations_t *getT55xxConfig(void) {
 void loadT55xxConfig(void) {
 #ifdef WITH_FLASH
 
-    if (!FlashInit()) {
+    uint8_t *buf = BigBuf_malloc(T55XX_CONFIG_LEN);
+
+    uint32_t size = 0;
+    if (exists_in_spiffs(T55XX_CONFIG_FILE)) {
+        size = size_in_spiffs(T55XX_CONFIG_FILE);
+    }
+    if (size == 0) {
+        Dbprintf("Spiffs file: %s does not exists or empty.", T55XX_CONFIG_FILE);
+        BigBuf_free();
         return;
     }
 
-    uint8_t *buf = BigBuf_malloc(T55XX_CONFIG_LEN);
-
-    Flash_CheckBusy(BUSY_TIMEOUT);
-    uint16_t isok = Flash_ReadDataCont(T55XX_CONFIG_OFFSET, buf, T55XX_CONFIG_LEN);
-    FlashStop();
+    if (SPIFFS_OK != rdv40_spiffs_read(T55XX_CONFIG_FILE, buf, T55XX_CONFIG_LEN, RDV40_SPIFFS_SAFETY_SAFE)) {
+        Dbprintf("Spiffs file: %s cannot be read.", T55XX_CONFIG_FILE);
+        BigBuf_free();
+        return;
+    }
 
     // verify read mem is actual data.
     uint8_t cntA = T55XX_CONFIG_LEN, cntB = T55XX_CONFIG_LEN;
@@ -381,6 +365,7 @@ void loadT55xxConfig(void) {
         if (buf[i] == 0x00) cntB--;
     }
     if (!cntA || !cntB) {
+        Dbprintf("Spiffs file: %s does not malformed or empty.", T55XX_CONFIG_FILE);
         BigBuf_free();
         return;
     }
@@ -388,9 +373,11 @@ void loadT55xxConfig(void) {
     if (buf[0] != 0xFF) // if not set for clear
         memcpy((uint8_t *)&T55xx_Timing, buf, T55XX_CONFIG_LEN);
 
-    if (isok == T55XX_CONFIG_LEN) {
+    if (size == T55XX_CONFIG_LEN) {
         if (g_dbglevel > 1) DbpString("T55XX Config load success");
     }
+
+    BigBuf_free();
 #endif
 }
 
@@ -424,7 +411,10 @@ void ModThenAcquireRawAdcSamples125k(uint32_t delay_off, uint16_t period_0, uint
     // start timer
     StartTicks();
 
-    WaitMS(100);
+    if (!prev_keep) {
+        WaitMS(100);
+    }
+
     // clear read buffer
     BigBuf_Clear_keep_EM();
 
@@ -1009,14 +999,13 @@ void CmdHIDsimTAG(uint32_t hi2, uint32_t hi, uint32_t lo, uint8_t longFMT, bool 
 // prepare a waveform pattern in the buffer based on the ID given then
 // simulate a FSK tag until the button is pressed
 // arg1 contains fcHigh and fcLow, arg2 contains STT marker and clock
-void CmdFSKsimTAGEx(uint8_t fchigh, uint8_t fclow, uint8_t separator, uint8_t clk, uint16_t bitslen, uint8_t *bits, bool ledcontrol, int numcycles) {
+void CmdFSKsimTAGEx(uint8_t fchigh, uint8_t fclow, uint8_t separator, uint8_t clk, uint16_t bitslen, const uint8_t *bits, bool ledcontrol, int numcycles) {
 
     FpgaDownloadAndGo(FPGA_BITSTREAM_LF);
 
     // free eventually allocated BigBuf memory
     BigBuf_free();
     BigBuf_Clear_ext(false);
-    clear_trace();
     set_tracing(false);
 
     int n = 0, i = 0;
@@ -1045,7 +1034,7 @@ void CmdFSKsimTAGEx(uint8_t fchigh, uint8_t fclow, uint8_t separator, uint8_t cl
 // prepare a waveform pattern in the buffer based on the ID given then
 // simulate a FSK tag until the button is pressed
 // arg1 contains fcHigh and fcLow, arg2 contains STT marker and clock
-void CmdFSKsimTAG(uint8_t fchigh, uint8_t fclow, uint8_t separator, uint8_t clk, uint16_t bitslen, uint8_t *bits, bool ledcontrol) {
+void CmdFSKsimTAG(uint8_t fchigh, uint8_t fclow, uint8_t separator, uint8_t clk, uint16_t bitslen, const uint8_t *bits, bool ledcontrol) {
     CmdFSKsimTAGEx(fchigh, fclow, separator, clk, bitslen, bits, ledcontrol, -1);
     reply_ng(CMD_LF_FSK_SIMULATE, PM3_EOPABORTED, NULL, 0);
 }
@@ -1326,10 +1315,6 @@ int lf_hid_watch(int findone, uint32_t *high, uint32_t *low, bool ledcontrol) {
                     if (bitlen == 26) {
                         cardnum = (lo >> 1) & 0xFFFF;
                         fac = (lo >> 17) & 0xFF;
-                    }
-                    if (bitlen == 37) {
-                        cardnum = (lo >> 1) & 0x7FFFF;
-                        fac = ((hi & 0xF) << 12) | (lo >> 20);
                     }
                     if (bitlen == 34) {
                         cardnum = (lo >> 1) & 0xFFFF;
@@ -1866,9 +1851,9 @@ void T55xxResetRead(uint8_t flags, bool ledcontrol) {
     if (ledcontrol) LED_A_OFF();
 }
 
-void T55xxDangerousRawTest(uint8_t *data, bool ledcontrol) {
+void T55xxDangerousRawTest(const uint8_t *data, bool ledcontrol) {
     // supports only default downlink mode
-    t55xx_test_block_t *c = (t55xx_test_block_t *)data;
+    const t55xx_test_block_t *c = (const t55xx_test_block_t *)data;
 
     uint8_t start_wait = 4;
     uint8_t bs[128 / 8];
@@ -2142,29 +2127,34 @@ void T55xx_ChkPwds(uint8_t flags, bool ledcontrol) {
 #ifdef WITH_FLASH
 
     BigBuf_Clear_EM();
-    uint16_t isok = 0;
-    uint8_t counter[2] = {0x00, 0x00};
-    isok = Flash_ReadData(DEFAULT_T55XX_KEYS_OFFSET, counter, sizeof(counter));
-    if (isok != sizeof(counter))
-        goto OUT;
+    uint32_t size = 0;
 
-    pwd_count = (uint16_t)(counter[1] << 8 | counter[0]);
+    if (exists_in_spiffs(T55XX_KEYS_FILE)) {
+        size = size_in_spiffs(T55XX_KEYS_FILE);
+    }
+    if (size == 0) {
+        Dbprintf("Spiffs file: %s does not exists or empty.", T55XX_KEYS_FILE);
+        goto OUT;
+    }
+
+    pwd_count = size / T55XX_KEY_LENGTH;
     if (pwd_count == 0)
         goto OUT;
 
     // since flash can report way too many pwds, we need to limit it.
     // bigbuff EM size is determined by CARD_MEMORY_SIZE
     // a password is 4bytes.
-    uint16_t pwd_size_available = MIN(CARD_MEMORY_SIZE, pwd_count * 4);
+    uint16_t pwd_size_available = MIN(CARD_MEMORY_SIZE, pwd_count * T55XX_KEY_LENGTH);
 
     // adjust available pwd_count
-    pwd_count = pwd_size_available / 4;
+    pwd_count = pwd_size_available / T55XX_KEY_LENGTH;
 
-    isok = Flash_ReadData(DEFAULT_T55XX_KEYS_OFFSET + 2, pwds, pwd_size_available);
-    if (isok != pwd_size_available)
+    if (SPIFFS_OK == rdv40_spiffs_read_as_filetype(T55XX_KEYS_FILE, pwds, pwd_size_available, RDV40_SPIFFS_SAFETY_SAFE)) {
+        if (g_dbglevel >= DBG_ERROR) Dbprintf("Loaded %u passwords from spiffs file: %s", pwd_count, T55XX_KEYS_FILE);
+    } else {
+        Dbprintf("Spiffs file: %s cannot be read.", T55XX_KEYS_FILE);
         goto OUT;
-
-    Dbprintf("Password dictionary count " _YELLOW_("%d"), pwd_count);
+    }
 
 #endif
 
@@ -2225,13 +2215,27 @@ void T55xxWakeUp(uint32_t pwd, uint8_t flags, bool ledcontrol) {
 
 /*-------------- Cloning routines -----------*/
 static void WriteT55xx(const uint32_t *blockdata, uint8_t startblock, uint8_t numblocks, bool ledcontrol) {
-    t55xx_write_block_t cmd;
-    cmd.pwd = 0;
-    cmd.flags = 0;
 
-    for (uint8_t i = numblocks + startblock; i > startblock; i--) {
-        cmd.data = blockdata[i - 1];
-        cmd.blockno = i - 1;
+    // Sanity checks
+    if (blockdata == NULL || numblocks == 0) {
+        reply_ng(CMD_LF_T55XX_WRITEBL, PM3_EINVARG, NULL, 0);
+        return;
+    }
+
+    t55xx_write_block_t cmd = {
+        .pwd = 0,
+        .flags = 0
+    };
+
+    // write in reverse order since we don't want to set
+    // a password enabled configuration first....
+    while (numblocks--) {
+
+        // zero based index
+        cmd.data = blockdata[numblocks];
+        cmd.blockno = startblock + numblocks;
+
+        // since this fct sends a NG packet every time,  this loop will send I number of NG
         T55xxWriteBlock((uint8_t *)&cmd, ledcontrol);
     }
 }
@@ -2320,7 +2324,7 @@ void CopyHIDtoT55x7(uint32_t hi2, uint32_t hi, uint32_t lo, uint8_t longFMT, boo
 }
 
 // clone viking tag to T55xx
-void CopyVikingtoT55xx(uint8_t *blocks, bool q5, bool em, bool ledcontrol) {
+void CopyVikingtoT55xx(const uint8_t *blocks, bool q5, bool em, bool ledcontrol) {
 
     uint32_t data[] = {T55x7_BITRATE_RF_32 | T55x7_MODULATION_MANCHESTER | (2 << T55x7_MAXBLOCK_SHIFT), 0, 0};
     if (q5) {
@@ -2342,7 +2346,7 @@ void CopyVikingtoT55xx(uint8_t *blocks, bool q5, bool em, bool ledcontrol) {
     reply_ng(CMD_LF_VIKING_CLONE, PM3_SUCCESS, NULL, 0);
 }
 
-int copy_em410x_to_t55xx(uint8_t card, uint8_t clock, uint32_t id_hi, uint32_t id_lo, bool ledcontrol) {
+int copy_em410x_to_t55xx(uint8_t card, uint8_t clock, uint32_t id_hi, uint32_t id_lo, bool add_electra, bool ledcontrol) {
 
 // Define 9bit header for EM410x tags
 #define EM410X_HEADER    0x1FF
@@ -2420,24 +2424,44 @@ int copy_em410x_to_t55xx(uint8_t card, uint8_t clock, uint32_t id_hi, uint32_t i
     clock = (clock == 0) ? 64 : clock;
     Dbprintf("Clock rate: %d", clock);
 
-    if (card == 1) { // T55x7
-        data[0] = clockbits | T55x7_MODULATION_MANCHESTER | (2 << T55x7_MAXBLOCK_SHIFT);
-    } else if (card == 2) { // EM4x05
-        data[0] = (EM4x05_SET_BITRATE(clock) | EM4x05_MODULATION_MANCHESTER | EM4x05_SET_NUM_BLOCKS(2));
-    } else { // T5555 (Q5)
-        data[0] = T5555_SET_BITRATE(clock) | T5555_MODULATION_MANCHESTER | (2 << T5555_MAXBLOCK_SHIFT);
+    uint32_t electra[] = { 0x7E1EAAAA, 0xAAAAAAAA };
+    uint8_t blocks = 2;
+    if (add_electra) {
+        blocks = 4;
     }
+
+    if (card == 1) { // T55x7
+        data[0] = clockbits | T55x7_MODULATION_MANCHESTER | (blocks << T55x7_MAXBLOCK_SHIFT);
+    } else if (card == 2) { // EM4x05
+        data[0] = (EM4x05_SET_BITRATE(clock) | EM4x05_MODULATION_MANCHESTER | EM4x05_SET_NUM_BLOCKS(blocks));
+    } else { // T5555 (Q5)
+        data[0] = T5555_SET_BITRATE(clock) | T5555_MODULATION_MANCHESTER | (blocks << T5555_MAXBLOCK_SHIFT);
+    }
+
     if (card == 2) {
         WriteEM4x05(data, 4, 3, ledcontrol);
+        if (add_electra) {
+            WriteEM4x05(electra, 7, 2, ledcontrol);
+        }
     } else {
         WriteT55xx(data, 0, 3, ledcontrol);
+        if (add_electra) {
+            WriteT55xx(electra, 3, 2, ledcontrol);
+        }
     }
 
     if (ledcontrol) LEDsoff();
-    Dbprintf("Tag %s written with 0x%08x%08x\n",
+
+    Dbprintf("Tag %s written with 0x%08x%08x",
              card == 0 ? "T5555" : (card == 1 ? "T55x7" : "EM4x05"),
              (uint32_t)(id >> 32),
-             (uint32_t)id);
+             (uint32_t)id
+            );
+
+    if (add_electra) {
+        Dbprintf("Electra 0x%08x%08x\n", electra[0], electra[1]);
+    }
+
     return PM3_SUCCESS;
 }
 
@@ -2554,13 +2578,13 @@ static void SendForward(uint8_t fwd_bit_count, bool fast) {
 // 32FC * 8us == 256us / 21.3 ==  12.018 steps. ok
 // 16FC * 8us == 128us / 21.3 ==  6.009 steps. ok
 #ifndef EM_START_GAP
-#define EM_START_GAP 55*8
+#define EM_START_GAP (55 * 8)
 #endif
 
     fwd_write_ptr = forwardLink_data;
     fwd_bit_sz = fwd_bit_count;
 
-    if (! fast) {
+    if (fast == false) {
         // Set up FPGA, 125kHz or 95 divisor
         LFSetupFPGAForADC(LF_DIVISOR_125, true);
     }
@@ -2600,16 +2624,21 @@ void EM4xBruteforce(uint32_t start_pwd, uint32_t n, bool ledcontrol) {
     FpgaWriteConfWord(FPGA_MAJOR_MODE_OFF);
     WaitMS(20);
     if (ledcontrol) LED_A_ON();
+
     LFSetupFPGAForADC(LF_DIVISOR_125, true);
+
     uint32_t candidates_found = 0;
     for (uint32_t pwd = start_pwd; pwd < 0xFFFFFFFF; pwd++) {
+
         if (((pwd - start_pwd) & 0x3F) == 0x00) {
+
             WDT_HIT();
             if (BUTTON_PRESS() || data_available()) {
                 Dbprintf("EM4x05 Bruteforce Interrupted");
                 break;
             }
         }
+
         // Report progress every 256 attempts
         if (((pwd - start_pwd) & 0xFF) == 0x00) {
             Dbprintf("Trying: %06Xxx", pwd >> 8);
@@ -2623,7 +2652,9 @@ void EM4xBruteforce(uint32_t start_pwd, uint32_t n, bool ledcontrol) {
 
         WaitUS(400);
         DoPartialAcquisition(0, false, 350, 1000, ledcontrol);
+
         uint8_t *mem = BigBuf_get_addr();
+
         if (mem[334] < 128) {
             candidates_found++;
             Dbprintf("Password candidate: " _GREEN_("%08X"), pwd);
@@ -2632,6 +2663,7 @@ void EM4xBruteforce(uint32_t start_pwd, uint32_t n, bool ledcontrol) {
                 break;
             }
         }
+
         // Beware: if smaller, tag might not have time to be back in listening state yet
         WaitMS(1);
     }
@@ -2680,7 +2712,9 @@ void EM4xReadWord(uint8_t addr, uint32_t pwd, uint8_t usepwd, bool ledcontrol) {
     * 0000 1010 ok
     * 0000 0001 fail
     **/
-    if (usepwd) EM4xLoginEx(pwd);
+    if (usepwd) {
+        EM4xLoginEx(pwd);
+    }
 
     forward_ptr = forwardLink_data;
     uint8_t len = Prepare_Cmd(FWD_CMD_READ);
@@ -2715,7 +2749,9 @@ void EM4xWriteWord(uint8_t addr, uint32_t data, uint32_t pwd, uint8_t usepwd, bo
     * 0000 1010 ok.
     * 0000 0001 fail
     **/
-    if (usepwd) EM4xLoginEx(pwd);
+    if (usepwd) {
+        EM4xLoginEx(pwd);
+    }
 
     forward_ptr = forwardLink_data;
     uint8_t len = Prepare_Cmd(FWD_CMD_WRITE);
@@ -2758,7 +2794,9 @@ void EM4xProtectWord(uint32_t data, uint32_t pwd, uint8_t usepwd, bool ledcontro
     * 0000 1010 ok.
     * 0000 0001 fail
     **/
-    if (usepwd) EM4xLoginEx(pwd);
+    if (usepwd) {
+        EM4xLoginEx(pwd);
+    }
 
     forward_ptr = forwardLink_data;
     uint8_t len = Prepare_Cmd(FWD_CMD_PROTECT);

@@ -18,6 +18,34 @@
 #include "usart.h"
 #include "proxmark3_arm.h"
 
+#define Dbprintf_usb(...) {\
+        bool tmpfpc = g_reply_via_fpc;\
+        bool tmpusb = g_reply_via_usb;\
+        g_reply_via_fpc = false;\
+        g_reply_via_usb = true;\
+        Dbprintf(__VA_ARGS__);\
+        g_reply_via_fpc = tmpfpc;\
+        g_reply_via_usb = tmpusb;}
+
+#define Dbprintf_fpc(...) {\
+        bool tmpfpc = g_reply_via_fpc;\
+        bool tmpusb = g_reply_via_usb;\
+        g_reply_via_fpc = true;\
+        g_reply_via_usb = false;\
+        Dbprintf(__VA_ARGS__);\
+        g_reply_via_fpc = tmpfpc;\
+        g_reply_via_usb = tmpusb;}
+
+#define Dbprintf_all(...) {\
+        bool tmpfpc = g_reply_via_fpc;\
+        bool tmpusb = g_reply_via_usb;\
+        g_reply_via_fpc = true;\
+        g_reply_via_usb = true;\
+        Dbprintf(__VA_ARGS__);\
+        g_reply_via_fpc = tmpfpc;\
+        g_reply_via_usb = tmpusb;}
+
+
 static volatile AT91PS_USART pUS1 = AT91C_BASE_US1;
 static volatile AT91PS_PIO pPIO   = AT91C_BASE_PIOA;
 static volatile AT91PS_PDC pPDC   = AT91C_BASE_PDC_US1;
@@ -57,14 +85,15 @@ static size_t us_rxfifo_high = 0;
 
 static void usart_fill_rxfifo(void) {
 
-    uint16_t rxfifo_free = 0;
+    uint16_t rxfifo_free;
 
     if (pUS1->US_RNCR == 0) { // One buffer got filled, backup buffer being used
 
-        if (us_rxfifo_low > us_rxfifo_high)
+        if (us_rxfifo_low > us_rxfifo_high) {
             rxfifo_free = us_rxfifo_low - us_rxfifo_high;
-        else
+        } else {
             rxfifo_free = sizeof(us_rxfifo) - us_rxfifo_high + us_rxfifo_low;
+        }
 
         uint16_t available = USART_BUFFLEN - usart_cur_inbuf_off;
 
@@ -72,8 +101,9 @@ static void usart_fill_rxfifo(void) {
 
             for (uint16_t i = 0; i < available; i++) {
                 us_rxfifo[us_rxfifo_high++] = usart_cur_inbuf[usart_cur_inbuf_off + i];
-                if (us_rxfifo_high == sizeof(us_rxfifo))
+                if (us_rxfifo_high == sizeof(us_rxfifo)) {
                     us_rxfifo_high = 0;
+                }
             }
 
             // Give next buffer
@@ -81,10 +111,11 @@ static void usart_fill_rxfifo(void) {
             pUS1->US_RNCR = USART_BUFFLEN;
 
             // Swap current buff
-            if (usart_cur_inbuf == us_in_a)
+            if (usart_cur_inbuf == us_in_a) {
                 usart_cur_inbuf = us_in_b;
-            else
+            } else {
                 usart_cur_inbuf = us_in_a;
+            }
 
             usart_cur_inbuf_off = 0;
         } else {
@@ -105,15 +136,17 @@ static void usart_fill_rxfifo(void) {
 
     if (pUS1->US_RCR < USART_BUFFLEN - usart_cur_inbuf_off) { // Current buffer partially filled
 
-        if (us_rxfifo_low > us_rxfifo_high)
+        if (us_rxfifo_low > us_rxfifo_high) {
             rxfifo_free = (us_rxfifo_low - us_rxfifo_high);
-        else
+        } else {
             rxfifo_free = (sizeof(us_rxfifo) - us_rxfifo_high + us_rxfifo_low);
+        }
 
         uint16_t available = (USART_BUFFLEN - pUS1->US_RCR - usart_cur_inbuf_off);
 
-        if (available > rxfifo_free)
+        if (available > rxfifo_free) {
             available = rxfifo_free;
+        }
 
         for (uint16_t i = 0; i < available; i++) {
             us_rxfifo[us_rxfifo_high++] = usart_cur_inbuf[usart_cur_inbuf_off + i];
@@ -127,14 +160,19 @@ static void usart_fill_rxfifo(void) {
 
 uint16_t usart_rxdata_available(void) {
     usart_fill_rxfifo();
-    if (us_rxfifo_low <= us_rxfifo_high)
+    if (us_rxfifo_low <= us_rxfifo_high) {
         return (us_rxfifo_high - us_rxfifo_low);
-    else
+    } else {
         return (sizeof(us_rxfifo) - us_rxfifo_low + us_rxfifo_high);
+    }
 }
 
 uint32_t usart_read_ng(uint8_t *data, size_t len) {
-    if (len == 0) return 0;
+
+    if (len == 0) {
+        return 0;
+    }
+
     uint32_t bytes_rcv = 0;
     uint32_t try = 0;
 //    uint32_t highest_observed_try = 0;
@@ -159,13 +197,16 @@ uint32_t usart_read_ng(uint8_t *data, size_t len) {
 //            highest_observed_try = MAX(highest_observed_try, try);
             try = 0;
         }
+
         len -= packetSize;
+
         while (packetSize--) {
             if (us_rxfifo_low == sizeof(us_rxfifo)) {
                 us_rxfifo_low = 0;
             }
             data[bytes_rcv++] = us_rxfifo[us_rxfifo_low++];
         }
+
         if (try++ == maxtry) {
 //            Dbprintf_usb("Dbg USART TIMEOUT");
                 break;

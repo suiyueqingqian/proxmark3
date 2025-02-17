@@ -67,7 +67,7 @@ TARGET1_OPTIONS = -define \{WITH_LF WITH_LF0 WITH_LF1 WITH_LF2 WITH_LF3\}
 # RDV40/Generic - Enable all HF modules except Felica
 TARGET2_OPTIONS = -define \{WITH_HF0 WITH_HF1 WITH_HF2 WITH_HF3 WITH_HF5\}
 # RDV40/Generic - Enable all HF modules except Felica and ISO14443, select HF_15 instead of HF
-TARGET3_OPTIONS = -define \{WITH_HF0 WITH_HF1 WITH_HF3 WITH_HF5 WITH_HF_15\}
+TARGET3_OPTIONS = -define \{WITH_HF0 WITH_HF1 WITH_HF3 WITH_HF5 WITH_HF_15 WITH_HF_15_LOWSIGNAL\}
 # RDV40/Generic - Enable all HF modules except ISO14443
 TARGET4_OPTIONS = -define \{WITH_HF0 WITH_HF1 WITH_HF3 WITH_HF4 WITH_HF5\}
 # ICOPYX
@@ -104,7 +104,6 @@ TARGET_COMMON_FILES += hi_flite.v
 TARGET_COMMON_FILES += hi_get_trace.v
 TARGET_COMMON_FILES += hi_iso14443a.v
 TARGET_COMMON_FILES += hi_reader.v
-TARGET_COMMON_FILES += hi_reader_15.v
 TARGET_COMMON_FILES += hi_simulate.v
 TARGET_COMMON_FILES += hi_sniffer.v
 TARGET_COMMON_FILES += lf_edge_detect.v
@@ -183,12 +182,6 @@ work:
 	$(Q)$(XILINX_TOOLS_PREFIX)par $(VERBOSITY) -w $< $@
 
 %.bit: %.ncd
-	# Hacky hack, make empty files for icopyx
-	if echo "$@" | grep -qi "icopyx"; then \
-		truncate -s0 ../fpga_icopyx_lf.bit; \
-		truncate -s0 ../fpga_icopyx_hf_15.bit; \
-		truncate -s0 ../fpga_icopyx_felica.bit; \
-	fi
 	$(Q)$(RM) $@ $*.drc $*.rbt
 	$(info [=] BITGEN $@)
 	$(Q)$(XILINX_TOOLS_PREFIX)bitgen $(VERBOSITY) -w $* $@

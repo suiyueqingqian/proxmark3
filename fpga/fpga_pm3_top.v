@@ -20,18 +20,8 @@
 // frequency modes, the FPGA might perform some demodulation first, to
 // reduce the amount of data that we must send to the ARM.
 //-----------------------------------------------------------------------------
-/*
-Once upon a time the FPGA had a 16 input mux so we could have all LF and HF modules enabled and selectable
-As the functionality grew, we run out of space in the FPGA and we had to split into an "LF only" and an "HF only" FPGA bitstream
-But even then after a while it was not possible to fit all the HF functions at the same time so now we have multiple "HF only" bitstreams
-For example "Felica but without ISO14443", or "ISO14443 but without Felica" or "HF_15 but without Felica and ISO14443"
 
-Because of all of the above, you can not enable both HF and LF modes at the same time, because some LF modules outputs
-map to the same mux inputs as some HF modules outputs (thanks to reducing the mux from 16 to 8 inputs) and you can not have
-multiple outputs connected together therefore leading to a failed compilation
-*/
-
-// These defines are meant to be passed by the Makefile so do not uncomment them here
+// These defines are for reference only, they are passed by the Makefile so do not uncomment them here
 // Proxmark3 RDV4 target
 //`define PM3RDV4
 // Proxmark3 generic target
@@ -64,20 +54,13 @@ multiple outputs connected together therefore leading to a failed compilation
 // WITH_HF5 enables module get trace
 //`define WITH_HF5
 
-//`include "define.v"
-//`include "util.v"
-//
 //`ifdef WITH_LF  `include "clk_divider.v"    `endif
 //`ifdef WITH_LF0 `include "lo_read.v"        `endif
 //`ifdef WITH_LF1 `include "lo_edge_detect.v" `endif
 //`ifdef WITH_LF2 `include "lo_passthru.v"    `endif
 //`ifdef WITH_LF3 `include "lo_adc.v"         `endif
 //
-//`ifdef WITH_HF_15
-//`ifdef WITH_HF0 `include "hi_reader_15.v"   `endif
-//`else
 //`ifdef WITH_HF0 `include "hi_reader.v"      `endif
-//`endif
 //`ifdef WITH_HF1 `include "hi_simulate.v"    `endif
 //`ifdef WITH_HF2 `include "hi_iso14443a.v"   `endif
 //`ifdef WITH_HF3 `include "hi_sniffer.v"     `endif
@@ -128,6 +111,8 @@ always @(posedge spck) if (~ncs) shift_reg <= {shift_reg[14:0], mosi};
 reg trace_enable;
 
 reg [7:0] lf_ed_threshold;
+reg [5:0] hf_edge_detect_threshold;
+reg [5:0] hf_edge_detect_threshold_high;
 
 // adjustable frequency clock
 wire [7:0] pck_cnt;
@@ -140,6 +125,12 @@ reg [11:0] conf_word;
 `else
 reg [8:0] conf_word;
 `endif
+
+initial
+begin
+    hf_edge_detect_threshold <= 7;
+    hf_edge_detect_threshold_high <= 20;
+end
 
 // We switch modes between transmitting to the 13.56 MHz tag and receiving
 // from it, which means that we must make sure that we can do so without
@@ -164,6 +155,11 @@ begin
 `else
         `FPGA_CMD_SET_CONFREG:  conf_word <= shift_reg[8:0];
         `FPGA_CMD_TRACE_ENABLE: trace_enable <= shift_reg[0];
+        `FPGA_CMD_SET_EDGE_DETECT_THRESHOLD:
+        begin
+            hf_edge_detect_threshold <= shift_reg[5:0];
+            hf_edge_detect_threshold_high <= shift_reg[11:6];
+        end
 `endif
     endcase
 end
@@ -277,11 +273,7 @@ assign mux6_pwr_lo = 1'b1;
 
 //   HF reader
 `ifdef WITH_HF0
-`ifdef WITH_HF_15
-hi_reader_15 hr(
-`else
 hi_reader hr(
-`endif
     .ck_1356meg (ck_1356megb),
     .adc_d      (adc_d),
     .subcarrier_frequency (conf_word[5:4]),
@@ -342,7 +334,9 @@ hi_iso14443a hisn(
     .pwr_oe2    (mux2_pwr_oe2),
     .pwr_oe3    (mux2_pwr_oe3),
     .pwr_oe4    (mux2_pwr_oe4),
-    .debug      (mux2_debug)
+    .debug      (mux2_debug),
+    .edge_detect_threshold (hf_edge_detect_threshold),
+    .edge_detect_threshold_high (hf_edge_detect_threshold_high)
 );
 `endif // WITH_HF2
 

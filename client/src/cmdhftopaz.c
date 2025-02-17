@@ -812,7 +812,7 @@ static int CmdHFTopazRaw(const char *Cmd) {
 }
 
 static int CmdHFTopazList(const char *Cmd) {
-    return CmdTraceListAlias(Cmd, "hf topaz", "topaz");
+    return CmdTraceListAlias(Cmd, "hf topaz", "topaz -c");
 }
 
 static int CmdHFTopazSniff(const char *Cmd) {
@@ -829,8 +829,16 @@ static int CmdHFTopazSniff(const char *Cmd) {
     CLIParserFree(ctx);
 
     uint8_t param = 0;
+
+    PrintAndLogEx(INFO, "Press " _GREEN_("pm3 button") " to abort sniffing");
+
     SendCommandNG(CMD_HF_ISO14443A_SNIFF, (uint8_t *)&param, sizeof(uint8_t));
 
+    PacketResponseNG resp;
+    WaitForResponse(CMD_HF_ISO14443A_SNIFF, &resp);
+    PrintAndLogEx(INFO, "Done!");
+    PrintAndLogEx(HINT, "Try `" _YELLOW_("hf topaz list")"` to view captured tracelog");
+    PrintAndLogEx(HINT, "Try `" _YELLOW_("trace save -h") "` to save tracelog for later analysing");
     return PM3_SUCCESS;
 }
 
@@ -838,13 +846,13 @@ static int CmdHFTopazDump(const char *Cmd) {
 
     CLIParserContext *ctx;
     CLIParserInit(&ctx, "hf topaz dump",
-                  "Dump TOPAZ tag to binary file\n"
+                  "Dump TOPAZ tag to file (bin/json)\n"
                   "If no <name> given, UID will be used as filename",
                   "hf topaz dump\n");
 
     void *argtable[] = {
         arg_param_begin,
-        arg_str0("f", "file", "<fn>", "filename of dump"),
+        arg_str0("f", "file", "<fn>", "Specify a filename for dump file"),
         arg_lit0(NULL, "ns", "no save to file"),
         arg_param_end
     };
@@ -897,9 +905,9 @@ static int CmdHFTopazDump(const char *Cmd) {
     }
 
     if (topaz_tag.size)
-        pm3_save_dump(filename, (uint8_t *)&topaz_tag, sizeof(topaz_tag_t) + topaz_tag.size, jsfTopaz, TOPAZ_BLOCK_SIZE);
+        pm3_save_dump(filename, (uint8_t *)&topaz_tag, sizeof(topaz_tag_t) + topaz_tag.size, jsfTopaz);
     else
-        pm3_save_dump(filename, (uint8_t *)&topaz_tag, sizeof(topaz_tag_t), jsfTopaz, TOPAZ_BLOCK_SIZE);
+        pm3_save_dump(filename, (uint8_t *)&topaz_tag, sizeof(topaz_tag_t), jsfTopaz);
 
     if (set_dynamic) {
         free(topaz_tag.dynamic_memory);
@@ -916,7 +924,7 @@ static int CmdHFTopazView(const char *Cmd) {
 
     void *argtable[] = {
         arg_param_begin,
-        arg_str1("f", "file", "<fn>",  "filename of dump (bin/eml/json)"),
+        arg_str1("f", "file", "<fn>",  "Specify a filename for dump file"),
         arg_param_end
     };
     CLIExecWithReturn(ctx, Cmd, argtable, false);

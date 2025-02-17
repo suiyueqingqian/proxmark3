@@ -220,7 +220,7 @@ static int CmdNoralsyClone(const char *Cmd) {
     } else {
         res = clone_t55xx_tag(blocks, ARRAYLEN(blocks));
     }
-    PrintAndLogEx(SUCCESS, "Done");
+    PrintAndLogEx(SUCCESS, "Done!");
     PrintAndLogEx(HINT, "Hint: try " _YELLOW_("`lf noralsy reader`") " to verify");
     return res;
 }
@@ -270,10 +270,10 @@ static int CmdNoralsySim(const char *Cmd) {
     PacketResponseNG resp;
     WaitForResponse(CMD_LF_ASK_SIMULATE, &resp);
 
-    PrintAndLogEx(INFO, "Done");
-    if (resp.status != PM3_EOPABORTED)
+    PrintAndLogEx(INFO, "Done!");
+    if (resp.status != PM3_EOPABORTED) {
         return resp.status;
-
+    }
     return PM3_SUCCESS;
 }
 
@@ -281,7 +281,7 @@ static command_t CommandTable[] = {
     {"help",    CmdHelp,          AlwaysAvailable, "This help"},
     {"demod",   CmdNoralsyDemod,  AlwaysAvailable, "demodulate an Noralsy tag from the GraphBuffer"},
     {"reader",  CmdNoralsyReader, IfPm3Lf,         "attempt to read and extract tag data"},
-    {"clone",   CmdNoralsyClone,  IfPm3Lf,         "clone Noralsy tag to T55x7 or Q5/T5555"},
+    {"clone",   CmdNoralsyClone,  IfPm3Lf,         "clone Noralsy tag to T55x7, Q5/T5555 or EM4305/4469"},
     {"sim",     CmdNoralsySim,    IfPm3Lf,         "simulate Noralsy tag"},
     {NULL, NULL, NULL, NULL}
 };

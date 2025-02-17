@@ -89,6 +89,10 @@ endif
 ifneq (,$(findstring WITH_STANDALONE_HF_15SNIFF,$(APP_CFLAGS)))
     SRC_STANDALONE = hf_15sniff.c
 endif
+# WITH_STANDALONE_HF_15SIM
+ifneq (,$(findstring WITH_STANDALONE_HF_15SIM,$(APP_CFLAGS)))
+    SRC_STANDALONE = hf_15sim.c
+endif
 # WITH_STANDALONE_HF_AVEFUL
 ifneq (,$(findstring WITH_STANDALONE_HF_AVEFUL,$(APP_CFLAGS)))
     SRC_STANDALONE = hf_aveful.c
@@ -96,6 +100,10 @@ endif
 # WITH_STANDALONE_HF_BOG
 ifneq (,$(findstring WITH_STANDALONE_HF_BOG,$(APP_CFLAGS)))
     SRC_STANDALONE = hf_bog.c
+endif
+# WITH_STANDALONE_HF_CARDHOPPER
+ifneq (,$(findstring WITH_STANDALONE_HF_CARDHOPPER,$(APP_CFLAGS)))
+    SRC_STANDALONE = hf_cardhopper.c
 endif
 # WITH_STANDALONE_HF_COLIN
 ifneq (,$(findstring WITH_STANDALONE_HF_COLIN,$(APP_CFLAGS)))
@@ -140,6 +148,10 @@ endif
 # WITH_STANDALONE_HF_TMUDFORD
 ifneq (,$(findstring WITH_STANDALONE_HF_TMUDFORD,$(APP_CFLAGS)))
     SRC_STANDALONE = hf_tmudford.c
+endif
+# WITH_STANDALONE_HF_UNISNIFF
+ifneq (,$(findstring WITH_STANDALONE_HF_UNISNIFF,$(APP_CFLAGS)))
+    SRC_STANDALONE = hf_unisniff.c
 endif
 # WITH_STANDALONE_HF_YOUNG
 ifneq (,$(findstring WITH_STANDALONE_HF_YOUNG,$(APP_CFLAGS)))

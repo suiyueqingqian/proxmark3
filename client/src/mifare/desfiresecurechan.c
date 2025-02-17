@@ -49,9 +49,11 @@ static const uint8_t CommandsCanUseAnyChannel[] = {
 };
 
 static bool CommandCanUseAnyChannel(uint8_t cmd) {
-    for (int i = 0; i < ARRAYLEN(CommandsCanUseAnyChannel); i++)
-        if (CommandsCanUseAnyChannel[i] == cmd)
+    for (int i = 0; i < ARRAYLEN(CommandsCanUseAnyChannel); i++) {
+        if (CommandsCanUseAnyChannel[i] == cmd) {
             return true;
+        }
+    }
     return false;
 }
 
@@ -207,10 +209,11 @@ static const CmdHeaderLengths_t CmdHeaderLengths[] = {
 };
 
 static uint8_t DesfireGetCmdHeaderLen(uint8_t cmd) {
-    for (int i = 0; i < ARRAYLEN(CmdHeaderLengths); i++)
-        if (CmdHeaderLengths[i].cmd == cmd)
+    for (int i = 0; i < ARRAYLEN(CmdHeaderLengths); i++) {
+        if (CmdHeaderLengths[i].cmd == cmd) {
             return CmdHeaderLengths[i].len;
-
+        }
+    }
     return 0;
 }
 
@@ -228,12 +231,15 @@ static const uint8_t EV1D40TransmitMAC[] = {
 };
 
 static bool DesfireEV1D40TransmitMAC(DesfireContext_t *ctx, uint8_t cmd) {
-    if (ctx->secureChannel != DACd40 && ctx->secureChannel != DACEV1)
+    if (ctx->secureChannel != DACd40 && ctx->secureChannel != DACEV1) {
         return true;
+    }
 
-    for (int i = 0; i < ARRAYLEN(EV1D40TransmitMAC); i++)
-        if (EV1D40TransmitMAC[i] == cmd)
+    for (int i = 0; i < ARRAYLEN(EV1D40TransmitMAC); i++) {
+        if (EV1D40TransmitMAC[i] == cmd) {
             return true;
+        }
+    }
 
     return false;
 }
@@ -247,12 +253,15 @@ static const uint8_t D40ReceiveMAC[] = {
 };
 
 static bool DesfireEV1D40ReceiveMAC(DesfireContext_t *ctx, uint8_t cmd) {
-    if (ctx->secureChannel != DACd40)
+    if (ctx->secureChannel != DACd40) {
         return true;
+    }
 
-    for (int i = 0; i < ARRAYLEN(D40ReceiveMAC); i++)
-        if (D40ReceiveMAC[i] == cmd)
+    for (int i = 0; i < ARRAYLEN(D40ReceiveMAC); i++) {
+        if (D40ReceiveMAC[i] == cmd) {
             return true;
+        }
+    }
 
     return false;
 }
@@ -269,10 +278,11 @@ static const uint8_t ISOChannelValidCmd[] = {
 };
 
 static bool DesfireISOChannelValidCmd(uint8_t cmd) {
-    for (int i = 0; i < ARRAYLEN(ISOChannelValidCmd); i++)
-        if (ISOChannelValidCmd[i] == cmd)
+    for (int i = 0; i < ARRAYLEN(ISOChannelValidCmd); i++) {
+        if (ISOChannelValidCmd[i] == cmd) {
             return true;
-
+        }
+    }
     return false;
 }
 
@@ -303,6 +313,10 @@ static void DesfireSecureChannelEncodeD40(DesfireContext_t *ctx, uint8_t cmd, ui
         size_t srcmaclen = padded_data_length(srcdatalen - hdrlen, desfire_get_key_block_length(ctx->keyType));
 
         uint8_t mac[32] = {0};
+        PrintAndLogEx(DEBUG, "MACing");
+        // Even though original DESFire (MF3ICD40) silicon can only encrypt which means normally
+        // every PCD operation must be decrypt, verifying a MAC involves the same operation on both
+        // sides so this is still encrypt here
         DesfireCryptoEncDecEx(ctx, DCOSessionKeyMac, data, srcmaclen, NULL, true, true, mac);
 
         if (DesfireEV1D40TransmitMAC(ctx, cmd)) {
@@ -349,15 +363,17 @@ static void DesfireSecureChannelEncodeD40(DesfireContext_t *ctx, uint8_t cmd, ui
 static void DesfireSecureChannelEncodeEV1(DesfireContext_t *ctx, uint8_t cmd, uint8_t *srcdata, size_t srcdatalen, uint8_t *dstdata, size_t *dstdatalen) {
 
     uint8_t *data  = calloc(DESFIRE_BUFFER_SIZE, sizeof(uint8_t));
-    if (data == NULL)
+    if (data == NULL) {
         return;
+    }
 
     memcpy(dstdata, srcdata, srcdatalen);
     *dstdatalen = srcdatalen;
 
     uint8_t hdrlen = DesfireGetCmdHeaderLen(cmd);
-    if (srcdatalen < hdrlen)
+    if (srcdatalen < hdrlen) {
         hdrlen = srcdatalen;
+    }
 
     size_t rlen;
 
@@ -582,12 +598,14 @@ static void DesfireSecureChannelDecodeD40(DesfireContext_t *ctx, uint8_t *srcdat
 static void DesfireSecureChannelDecodeEV1(DesfireContext_t *ctx, uint8_t *srcdata, size_t srcdatalen, uint8_t respcode, uint8_t *dstdata, size_t *dstdatalen) {
 
     uint8_t *data  = calloc(DESFIRE_BUFFER_SIZE, sizeof(uint8_t));
-    if (data == NULL)
+    if (data == NULL) {
         return;
+    }
 
     // if comm mode = plain --> response with MAC
     // if request is not zero length --> response MAC
     if (ctx->commMode == DCMPlain || ctx->commMode == DCMMACed || (ctx->commMode == DCMEncrypted && !ctx->lastRequestZeroLen)) {
+
         if (srcdatalen < DesfireGetMACLength(ctx)) {
             memcpy(dstdata, srcdata, srcdatalen);
             *dstdatalen = srcdatalen;
@@ -596,6 +614,7 @@ static void DesfireSecureChannelDecodeEV1(DesfireContext_t *ctx, uint8_t *srcdat
         }
 
         memcpy(dstdata, srcdata, srcdatalen - DesfireGetMACLength(ctx));
+
         *dstdatalen = srcdatalen - DesfireGetMACLength(ctx);
 
         memcpy(data, srcdata, *dstdatalen);
@@ -603,15 +622,22 @@ static void DesfireSecureChannelDecodeEV1(DesfireContext_t *ctx, uint8_t *srcdat
 
         uint8_t cmac[DESFIRE_MAX_CRYPTO_BLOCK_SIZE] = {0};
         DesfireCryptoCMAC(ctx, data, *dstdatalen + 1, cmac);
+
         if (memcmp(&srcdata[*dstdatalen], cmac, DesfireGetMACLength(ctx)) != 0) {
+
             PrintAndLogEx(WARNING, "Received MAC is not match with calculated");
             PrintAndLogEx(INFO, "  received MAC:   %s", sprint_hex(&srcdata[*dstdatalen], DesfireGetMACLength(ctx)));
             PrintAndLogEx(INFO, "  calculated MAC: %s", sprint_hex(cmac, DesfireGetMACLength(ctx)));
+
         } else {
-            if (GetAPDULogging())
+
+            if (GetAPDULogging()) {
                 PrintAndLogEx(INFO, "Received MAC OK");
+            }
         }
+
     } else if (ctx->commMode == DCMEncrypted || ctx->commMode == DCMEncryptedWithPadding) {
+
         if (srcdatalen < desfire_get_key_block_length(ctx->keyType)) {
             memcpy(dstdata, srcdata, srcdatalen);
             *dstdatalen = srcdatalen;
@@ -620,7 +646,7 @@ static void DesfireSecureChannelDecodeEV1(DesfireContext_t *ctx, uint8_t *srcdat
         }
 
         DesfireCryptoEncDec(ctx, DCOSessionKeyEnc, srcdata, srcdatalen, dstdata, false);
-        //PrintAndLogEx(INFO, "decoded[%d]: %s", srcdatalen, sprint_hex(dstdata, srcdatalen));
+        // PrintAndLogEx(INFO, "decoded[%d]: %s", srcdatalen, sprint_hex(dstdata, srcdatalen));
 
         size_t puredatalen = DesfireSearchCRCPos(dstdata, srcdatalen, respcode, 4);
         if (puredatalen != 0) {
@@ -867,4 +893,3 @@ bool PrintChannelModeWarning(uint8_t cmd, DesfireSecureChannel secureChannel, De
 
     return found;
 }
-

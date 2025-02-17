@@ -232,7 +232,7 @@ static int CmdSecurakeyClone(const char *Cmd) {
     } else {
         res = clone_t55xx_tag(blocks, ARRAYLEN(blocks));
     }
-    PrintAndLogEx(SUCCESS, "Done");
+    PrintAndLogEx(SUCCESS, "Done!");
     PrintAndLogEx(HINT, "Hint: try " _YELLOW_("`lf securakey reader`") " to verify");
     return res;
 }
@@ -283,10 +283,10 @@ static int CmdSecurakeySim(const char *Cmd) {
     PacketResponseNG resp;
     WaitForResponse(CMD_LF_ASK_SIMULATE, &resp);
 
-    PrintAndLogEx(INFO, "Done");
-    if (resp.status != PM3_EOPABORTED)
+    PrintAndLogEx(INFO, "Done!");
+    if (resp.status != PM3_EOPABORTED) {
         return resp.status;
-
+    }
     return PM3_SUCCESS;
 }
 
@@ -294,7 +294,7 @@ static command_t CommandTable[] = {
     {"help",    CmdHelp,            AlwaysAvailable, "This help"},
     {"demod",   CmdSecurakeyDemod,  AlwaysAvailable, "demodulate an Securakey tag from the GraphBuffer"},
     {"reader",  CmdSecurakeyReader, IfPm3Lf,         "attempt to read and extract tag data"},
-    {"clone",   CmdSecurakeyClone,  IfPm3Lf,         "clone Securakey tag to T55x7"},
+    {"clone",   CmdSecurakeyClone,  IfPm3Lf,         "clone Securakey tag to T55x7, Q5/T5555 or EM4305/4469"},
     {"sim",     CmdSecurakeySim,    IfPm3Lf,         "simulate Securakey tag"},
     {NULL, NULL, NULL, NULL}
 };

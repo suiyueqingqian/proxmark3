@@ -103,10 +103,15 @@ static uint8_t GetParadoxBits(const uint32_t fc, const uint32_t cn, unsigned int
 int demodParadox(bool verbose, bool oldChksum) {
     (void) verbose; // unused so far
     //raw fsk demod no manchester decoding no start bit finding just get binary from wave
-    uint8_t bits[MAX_GRAPH_TRACE_LEN] = {0};
-    size_t size = getFromGraphBuf(bits);
+    uint8_t *bits = calloc(MAX_GRAPH_TRACE_LEN, sizeof(uint8_t));
+    if (bits == NULL) {
+        PrintAndLogEx(FAILED, "failed to allocate memory");
+        return PM3_EMALLOC;
+    }
+    size_t size = getFromGraphBuffer(bits);
     if (size == 0) {
         PrintAndLogEx(DEBUG, "DEBUG: Error - Paradox not enough samples");
+        free(bits);
         return PM3_ESOFT;
     }
 
@@ -125,6 +130,7 @@ int demodParadox(bool verbose, bool oldChksum) {
         else
             PrintAndLogEx(DEBUG, "DEBUG: Error - Paradox error demoding fsk %d", idx);
 
+        free(bits);
         return PM3_ESOFT;
     }
 
@@ -153,7 +159,7 @@ int demodParadox(bool verbose, bool oldChksum) {
 
         // not manchester data
         if (bits[i] == bits[i + 1]) {
-            PrintAndLogEx(WARNING, "Error Manchester at %u", i);
+            PrintAndLogEx(DEBUG, "Error Manchester at %u", i);
             errors++;
         }
 
@@ -167,7 +173,7 @@ int demodParadox(bool verbose, bool oldChksum) {
     }
 
     if (errors) {
-        PrintAndLogEx(WARNING, "Total Manchester Errors... %u", errors);
+        PrintAndLogEx(DEBUG, "Total Manchester Errors... %u", errors);
     }
 
     setDemodBuff(bits, size, idx);
@@ -175,6 +181,7 @@ int demodParadox(bool verbose, bool oldChksum) {
 
     if (hi2 == 0 && hi == 0 && lo == 0) {
         PrintAndLogEx(DEBUG, "DEBUG: Error - Paradox no value found");
+        free(bits);
         return PM3_ESOFT;
     }
 
@@ -230,6 +237,7 @@ int demodParadox(bool verbose, bool oldChksum) {
         printDemodBuff(0, false, false, false);
     }
 
+    free(bits);
     return PM3_SUCCESS;
 }
 
@@ -375,7 +383,7 @@ static int CmdParadoxClone(const char *Cmd) {
     } else {
         res = clone_t55xx_tag(blocks, ARRAYLEN(blocks));
     }
-    PrintAndLogEx(SUCCESS, "Done");
+    PrintAndLogEx(SUCCESS, "Done!");
     PrintAndLogEx(HINT, "Hint: try " _YELLOW_("`lf paradox read`") " to verify");
     return res;
 }
@@ -451,10 +459,10 @@ static int CmdParadoxSim(const char *Cmd) {
     PacketResponseNG resp;
     WaitForResponse(CMD_LF_FSK_SIMULATE, &resp);
 
-    PrintAndLogEx(INFO, "Done");
-    if (resp.status != PM3_EOPABORTED)
+    PrintAndLogEx(INFO, "Done!");
+    if (resp.status != PM3_EOPABORTED) {
         return resp.status;
-
+    }
     return PM3_SUCCESS;
 }
 
@@ -463,7 +471,7 @@ static command_t CommandTable[] = {
     {"help",   CmdHelp,          AlwaysAvailable, "This help"},
     {"demod",  CmdParadoxDemod,  AlwaysAvailable, "demodulate a Paradox FSK tag from the GraphBuffer"},
     {"reader", CmdParadoxReader, IfPm3Lf,         "attempt to read and extract tag data"},
-    {"clone",  CmdParadoxClone,  IfPm3Lf,         "clone paradox tag"},
+    {"clone",  CmdParadoxClone,  IfPm3Lf,         "clone paradox tag to T55x7, Q5/T5555 or EM4305/4469"},
     {"sim",    CmdParadoxSim,    IfPm3Lf,         "simulate paradox tag"},
     {NULL, NULL, NULL, NULL}
 };
@@ -500,5 +508,3 @@ int detectParadox(uint8_t *dest, size_t *size, int *wave_start_idx) {
 
     return (int)idx;
 }
-
-
